@@ -20,7 +20,7 @@ coverage/
 *.log
 npm-debug.log*
 tmp/
-temp/
+/temp/
 .cache/
 
 # App storage (keep .gitkeep only)
