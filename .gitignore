@@ -23,6 +23,18 @@ tmp/
 temp/
 .cache/
 
+# App storage (keep .gitkeep only)
+storage/logs/*
+!storage/logs/.gitkeep
+storage/temp/*
+!storage/temp/.gitkeep
+storage/mappings/*
+!storage/mappings/.gitkeep
+storage/state/*
+!storage/state/.gitkeep
+telegram.session*
+*.session
+
 # IDE (optional, uncomment if needed)
 # .idea/
 # .vscode/
