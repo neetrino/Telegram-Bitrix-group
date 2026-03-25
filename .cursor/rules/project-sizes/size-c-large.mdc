@@ -1,0 +1,445 @@
+---
+description: ՄԵԾ նախագծերի կոնֆիգուրացիա (6+ ամիս, 5+ մշակող)। Monorepo մոդուլային ճարտարապետությամբ։
+globs: ["**/*"]
+alwaysApply: false
+---
+
+# ՄԵԾ ՆԱԽԱԳԾ (SIZE C)
+
+> Monorepo մոդուլների հստակ սահմաններով։ 6+ ամիս, 5+ մշակող։
+
+---
+
+## 🎯 ԲՆՈՒԹԱԳՐԵՐ
+
+| Պարամետր | Արժեք |
+|----------|--------|
+| Մշակման ժամկետ | 6+ ամիս |
+| Թիմ | 5+ մարդ |
+| Ֆիչերի քանակ | 50+ |
+| Բարդություն | Բարձր |
+| Մասշտաբավորում | Պարտադիր |
+
+---
+
+## 📁 ՆԱԽԱԳԾԻ ԿԱՌՈՒՑՎԱԾՔԸ (MONOREPO)
+
+```
+project/
+├── apps/
+│   ├── web/                       # Frontend (Next.js)
+│   │   ├── src/
+│   │   │   ├── app/              # App Router
+│   │   │   ├── features/         # Feature modules
+│   │   │   ├── shared/           # App-specific shared
+│   │   │   └── config/
+│   │   ├── package.json
+│   │   └── tsconfig.json
+│   │
+│   ├── api/                       # Backend (NestJS)
+│   │   ├── src/
+│   │   │   ├── modules/          # Feature modules
+│   │   │   │   ├── auth/
+│   │   │   │   ├── users/
+│   │   │   │   ├── products/
+│   │   │   │   └── orders/
+│   │   │   ├── common/           # Guards, filters, etc.
+│   │   │   ├── config/
+│   │   │   └── main.ts
+│   │   ├── package.json
+│   │   └── tsconfig.json
+│   │
+│   └── admin/                     # Admin panel (ընտրովի)
+│       └── ...
+│
+├── packages/
+│   ├── ui/                        # UI գրադարան
+│   │   ├── src/
+│   │   │   ├── Button/
+│   │   │   │   ├── Button.tsx
+│   │   │   │   ├── Button.test.tsx
+│   │   │   │   └── index.ts
+│   │   │   ├── Modal/
+│   │   │   ├── Form/
+│   │   │   └── index.ts
+│   │   ├── package.json
+│   │   └── tsconfig.json
+│   │
+│   ├── domain/                    # 🔥 Մաքուր բիզնես-լոգիկա
+│   │   ├── src/
+│   │   │   ├── entities/         # Դոմենային էնթիթիներ
+│   │   │   │   ├── Order.ts
+│   │   │   │   ├── Product.ts
+│   │   │   │   └── User.ts
+│   │   │   ├── use-cases/        # Բիզնես-սցենարներ
+│   │   │   │   ├── CreateOrder.ts
+│   │   │   │   ├── CalculateDiscount.ts
+│   │   │   │   └── ValidateOrder.ts
+│   │   │   ├── rules/            # Բիզնես-կանոններ
+│   │   │   │   ├── pricing.ts
+│   │   │   │   └── shipping.ts
+│   │   │   └── index.ts
+│   │   ├── package.json
+│   │   └── tsconfig.json
+│   │
+│   ├── shared/                    # Ընդհանուր ուտիլիտաներ
+│   │   ├── src/
+│   │   │   ├── utils/
+│   │   │   ├── types/
+│   │   │   └── constants/
+│   │   └── package.json
+│   │
+│   ├── contracts/                 # API կոնտրակտներ
+│   │   ├── src/
+│   │   │   ├── api/              # OpenAPI schemas
+│   │   │   ├── events/           # Event schemas
+│   │   │   └── dto/              # Shared DTOs
+│   │   └── package.json
+│   │
+│   └── config/                    # Ընդհանուր կոնֆիգներ
+│       ├── eslint/
+│       ├── typescript/
+│       └── tailwind/
+│
+├── infrastructure/
+│   ├── docker/
+│   │   ├── docker-compose.yml
+│   │   ├── Dockerfile.web
+│   │   └── Dockerfile.api
+│   ├── kubernetes/               # K8s մանիֆեստներ
+│   └── terraform/                # IaC
+│
+├── docs/
+│   ├── architecture/
+│   │   ├── 01-OVERVIEW.md
+│   │   ├── 02-MODULES.md
+│   │   ├── 03-DATA_FLOW.md
+│   │   └── diagrams/
+│   ├── decisions/                # ADRs
+│   │   ├── ADR-001-monorepo.md
+│   │   ├── ADR-002-clean-architecture.md
+│   │   └── template.md
+│   ├── api/
+│   │   └── openapi.yaml
+│   ├── guides/
+│   │   ├── setup.md
+│   │   ├── deployment.md
+│   │   └── contributing.md
+│   ├── PROGRESS.md
+│   ├── DECISIONS.md
+│   └── CHANGELOG.md
+│
+├── scripts/
+│   ├── setup.sh
+│   ├── deploy.sh
+│   └── generate-types.ts
+│
+├── turbo.json                    # Turborepo config
+├── pnpm-workspace.yaml
+└── package.json
+```
+
+---
+
+## 📝 ՓԱՍՏԱԹՂԹԱՎՈՐՈՒՄ
+
+### Պարտադիր ֆայլեր (15+)
+
+#### Ճարտարապետություն (docs/architecture/)
+- 01-OVERVIEW.md — Համակարգի ակնարկ
+- 02-MODULES.md — Մոդուլների նկարագրություն
+- 03-DATA_FLOW.md — Տվյալների հոսքեր
+- diagrams/ — Դիագրամներ
+
+#### ADR (docs/decisions/)
+- ADR-001-*.md — Որոշում 1
+- ADR-002-*.md — Որոշում 2
+- template.md — ADR կաղապար
+
+#### Ուղեցույցներ (docs/guides/)
+- setup.md — Միջավայրի կարգավորում
+- deployment.md — Դեպլոյ
+- contributing.md — Ինչպես ներդրում անել
+
+### ADR կաղապար
+
+```markdown
+# ADR-XXX: [Անուն]
+
+**Կարգավիճակ.** [Proposed | Accepted | Deprecated | Superseded]
+**Ամսաթիվ.** YYYY-MM-DD
+**Հեղինակներ.** [@username]
+
+## Կոնտեքստ
+
+Ի՞նչ խնդիր ենք լուծում։ Ի՞նչ սահմանափակումներ կան։
+
+## Լուծում
+
+Ի՞նչ ենք որոշել անել։
+
+## Այլընտրանքներ
+
+### Տարբերակ A
+- Դրական. ...
+- Բացասական. ...
+
+### Տարբերակ B (ընտրված)
+- Դրական. ...
+- Բացասական. ...
+
+## Հետևանքներ
+
+### Դրական
+- ...
+
+### Բացասական
+- ...
+
+## Կապված որոշումներ
+
+- ADR-XXX: ...
+```
+
+---
+
+## 🏗️ ՓԱԿԵՏՆԵՐԻ ԿԱՆՈՆՆԵՐ
+
+### Փաթեթների միջև կախվածություններ
+
+```
+apps/web → packages/ui, packages/shared, packages/contracts
+apps/api → packages/domain, packages/shared, packages/contracts
+
+packages/ui → packages/shared (միայն types/utils)
+packages/domain → ՈՉԻՆՉ (մաքուր բիզնես-լոգիկա)
+packages/shared → ՈՉԻՆՉ
+packages/contracts → packages/shared (միայն types)
+```
+
+### Յուրաքանչյուր փաթեթի package.json
+
+```json
+// packages/domain/package.json
+{
+  "name": "@project/domain",
+  "version": "1.0.0",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "test": "vitest",
+    "typecheck": "tsc --noEmit"
+  }
+}
+```
+
+### Մաքուր Domain Layer
+
+```typescript
+// packages/domain/src/entities/Order.ts
+// Prisma, NestJS, React-ից կախվածություն ՉԿԱ
+
+export interface OrderItem {
+  productId: string;
+  quantity: number;
+  price: number;
+}
+
+export class Order {
+  constructor(
+    public readonly id: string,
+    public readonly items: OrderItem[],
+    public readonly status: OrderStatus,
+    public readonly createdAt: Date,
+  ) {}
+
+  get total(): number {
+    return this.items.reduce(
+      (sum, item) => sum + item.price * item.quantity,
+      0
+    );
+  }
+
+  canBeCancelled(): boolean {
+    return ['pending', 'confirmed'].includes(this.status);
+  }
+
+  addItem(item: OrderItem): Order {
+    return new Order(
+      this.id,
+      [...this.items, item],
+      this.status,
+      this.createdAt,
+    );
+  }
+}
+```
+
+---
+
+## 🧪 ԹԵՍՏԱՎՈՐՈՒՄ
+
+### Ռազմավարություն
+
+| Տիպ | Որտեղ | Ծածկույթ |
+|-----|------|----------|
+| Unit | packages/domain | ≥ 90% |
+| Unit | packages/shared | ≥ 80% |
+| Integration | apps/api | 100% endpoints |
+| Component | packages/ui | Storybook + tests |
+| E2E | apps/web | Կրիտիկ flows |
+
+### Domain-ի թեստավորում
+
+```typescript
+// packages/domain/src/entities/Order.test.ts
+describe('Order', () => {
+  describe('total', () => {
+    it('should calculate total correctly', () => {
+      const order = new Order('1', [
+        { productId: 'p1', quantity: 2, price: 1000 },
+        { productId: 'p2', quantity: 1, price: 500 },
+      ], 'pending', new Date());
+
+      expect(order.total).toBe(2500);
+    });
+  });
+
+  describe('canBeCancelled', () => {
+    it.each(['pending', 'confirmed'])('should return true for %s', (status) => {
+      const order = new Order('1', [], status as OrderStatus, new Date());
+      expect(order.canBeCancelled()).toBe(true);
+    });
+
+    it.each(['shipped', 'delivered'])('should return false for %s', (status) => {
+      const order = new Order('1', [], status as OrderStatus, new Date());
+      expect(order.canBeCancelled()).toBe(false);
+    });
+  });
+});
+```
+
+---
+
+## ⚙️ TURBOREPO
+
+### turbo.json
+
+```json
+{
+  "$schema": "https://turbo.build/schema.json",
+  "pipeline": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**", ".next/**"]
+    },
+    "test": {
+      "dependsOn": ["^build"]
+    },
+    "lint": {},
+    "typecheck": {
+      "dependsOn": ["^build"]
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true
+    }
+  }
+}
+```
+
+### Հրամաններ
+
+```bash
+# Բոլոր հավելվածները
+pnpm turbo build
+pnpm turbo test
+pnpm turbo lint
+
+# Կոնկրետ հավելված
+pnpm turbo build --filter=web
+pnpm turbo dev --filter=api
+
+# Կախվածություններով
+pnpm turbo build --filter=web...
+```
+
+---
+
+## 🚀 CI/CD
+
+### GitHub Actions
+
+```yaml
+# .github/workflows/ci.yml
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+      
+      - run: pnpm install
+      - run: pnpm turbo lint
+      - run: pnpm turbo typecheck
+      - run: pnpm turbo test
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+      
+      - run: pnpm install
+      - run: pnpm turbo build
+```
+
+---
+
+## 📋 ՍՏՈՒԳԱՑՈՒՑԱԿ
+
+### Մեկնարկից առաջ
+- [ ] Monorepo կառուցվածքը ստեղծված է
+- [ ] Turborepo-ն կարգավորված է
+- [ ] pnpm workspace-ը կարգավորված է
+- [ ] Բոլոր փաթեթները ինիցիալիզացված են
+- [ ] CI/CD-ն կարգավորված է
+- [ ] Փաստաթղթավորումը ստեղծված է
+- [ ] ADR կաղապարը պատրաստ է
+
+### Նոր փաթեթ
+- [ ] Թղթապանակ packages/-ում ստեղծված է
+- [ ] package.json-ը կարգավորված է
+- [ ] Կախվածությունները ճիշտ են
+- [ ] Export-ները կարգավորված են
+- [ ] Թեստերը գրված են
+- [ ] Փաստաթղթավորումը թարմացված է
+
+### Ռելիզ
+- [ ] Բոլոր թեստերը անցնում են
+- [ ] ADR նոր որոշումների համար
+- [ ] CHANGELOG-ը թարմացված է
+- [ ] Փաթեթների տարբերակները թարմացված են
+- [ ] Փաստաթղթավորումը արդի է
+
+---
+
+**Տարբերակ.** 1.1
+**Ամսաթիվ.** 2026-02-12

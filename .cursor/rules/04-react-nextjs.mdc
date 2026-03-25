@@ -1,0 +1,668 @@
+---
+description: React և Next.js-ի կանոններ։ Կիրառվում է կոմպոնենտներին և էջերին։
+globs: ["**/*.tsx", "**/app/**", "**/components/**", "**/features/**"]
+alwaysApply: false
+---
+
+# REACT ԵՎ NEXT.JS-Ի ԿԱՆՈՆՆԵՐ
+
+> Ժամանակակից React Server Components-ով, App Router-ով և լավագույն պրակտիկաներով։
+
+---
+
+## 🎯 ՀԻՄՆԱԿԱՆ ՍԿԶԲՈՒՆՔՆԵՐ
+
+1. **Server Components լռելյայն** — 'use client' միայն երբ անհրաժեշտ է
+2. **Կոմպոզիցիան ավելի կարևոր է ժառանգությունից** — փոքր վերաօգտագործվող կոմպոնենտներ
+3. **Colocation** — կապված կոդը միասին
+4. **Վիճակի նվազագույն** — derive որտեղ հնարավոր է
+
+---
+
+## 📦 ԿՈՄՊՈՆԵՆՏՆԵՐԻ ԿԱՌՈՒՑՎԱԾՔ
+
+### Կոմպոնենտի կաղապար
+
+```tsx
+// 1. Imports — նախ React/Next, ապա արտաքին, ապա ներքին
+import { useState, useCallback, memo } from 'react';
+import { useRouter } from 'next/navigation';
+import { clsx } from 'clsx';
+
+import { Button } from '@/shared/components/ui';
+import { useUser } from '@/features/auth';
+import type { Product } from './types';
+
+// 2. Types
+interface ProductCardProps {
+  product: Product;
+  onAddToCart: (productId: string) => void;
+  variant?: 'compact' | 'full';
+  className?: string;
+}
+
+// 3. Component
+export function ProductCard({
+  product,
+  onAddToCart,
+  variant = 'full',
+  className,
+}: ProductCardProps) {
+  // 4. Hooks
+  const [quantity, setQuantity] = useState(1);
+  const router = useRouter();
+  
+  // 5. Derived state
+  const isOutOfStock = product.stock === 0;
+  const totalPrice = product.price * quantity;
+  
+  // 6. Callbacks
+  const handleAddToCart = useCallback(() => {
+    onAddToCart(product.id);
+  }, [product.id, onAddToCart]);
+  
+  // 7. Early returns
+  if (!product.isActive) {
+    return null;
+  }
+  
+  // 8. Render
+  return (
+    <article className={clsx('rounded-lg p-4', className)}>
+      <img 
+        src={product.image} 
+        alt={product.name}
+        className="w-full aspect-square object-cover"
+      />
+      <h3 className="mt-4 text-lg font-semibold">
+        {product.name}
+      </h3>
+      <p className="text-2xl font-bold text-primary">
+        {formatPrice(totalPrice)}
+      </p>
+      <Button 
+        onClick={handleAddToCart}
+        disabled={isOutOfStock}
+        className="mt-4 w-full"
+      >
+        {isOutOfStock ? 'Պատրաստ չէ' : 'Զամբյուղ'}
+      </Button>
+    </article>
+  );
+}
+```
+
+### Անվանված export-ներ (միշտ)
+
+```tsx
+// ✅ ԼԱՎ — անվանված export
+export function ProductCard() { ... }
+export function ProductList() { ... }
+
+// ❌ ՎԱՏ — default export
+export default function ProductCard() { ... }
+```
+
+---
+
+## 🌐 NEXT.JS APP ROUTER
+
+### Server Components (լռելյայն)
+
+```tsx
+// app/products/page.tsx — Server Component
+import { ProductList } from '@/features/products';
+import { getProducts } from '@/lib/api';
+
+// Async կոմպոնենտ — տվյալները սերվերում
+export default async function ProductsPage() {
+  const products = await getProducts();
+  
+  return (
+    <main className="container py-8">
+      <h1 className="text-3xl font-bold mb-8">Կատալոգ</h1>
+      <ProductList products={products} />
+    </main>
+  );
+}
+```
+
+### Client Components (երբ ինտերակտիվություն է պետք)
+
+```tsx
+// features/products/components/ProductFilters.tsx
+'use client';
+
+import { useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+
+export function ProductFilters() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const [category, setCategory] = useState(searchParams.get('category') ?? '');
+  
+  const handleFilter = () => {
+    const params = new URLSearchParams(searchParams);
+    params.set('category', category);
+    router.push(`?${params.toString()}`);
+  };
+  
+  return (
+    <div className="flex gap-4">
+      <select 
+        value={category} 
+        onChange={(e) => setCategory(e.target.value)}
+      >
+        <option value="">Բոլոր կատեգորիաները</option>
+        <option value="electronics">Էլեկտրոնիկա</option>
+      </select>
+      <button onClick={handleFilter}>Կիրառել</button>
+    </div>
+  );
+}
+```
+
+### Երբ օգտագործել 'use client'
+
+```tsx
+// ✅ 'use client' պետք է.
+// - useState, useEffect, useContext
+// - Event handlers (onClick, onChange)
+// - Browser APIs (localStorage, window)
+// - Կաստոմ հուկեր վիճակով
+// - Միայն բրաուզերի գրադարաններ
+
+// ❌ 'use client' ՊԵՏՔ ՉԷ.
+// - Ստատիկ ռենդեր
+// - Տվյալների fetch
+// - Ուղղակի ԲԴ-ի մուտք
+// - Server Actions
+```
+
+### Server Actions
+
+```tsx
+// app/actions/products.ts
+'use server';
+
+import { revalidatePath } from 'next/cache';
+import { db } from '@/lib/db';
+
+export async function createProduct(formData: FormData) {
+  const name = formData.get('name') as string;
+  const price = Number(formData.get('price'));
+  
+  await db.product.create({
+    data: { name, price },
+  });
+  
+  revalidatePath('/products');
+}
+
+// Օգտագործում կոմպոնենտում
+// app/products/new/page.tsx
+import { createProduct } from '../actions/products';
+
+export default function NewProductPage() {
+  return (
+    <form action={createProduct}>
+      <input name="name" required />
+      <input name="price" type="number" required />
+      <button type="submit">Ստեղծել</button>
+    </form>
+  );
+}
+```
+
+---
+
+## 🎨 ՍԹԱՅԼԵՐ ԵՎ TAILWIND
+
+### Tailwind-ի կանոններ
+
+```tsx
+// ✅ ԼԱՎ — սեմանտիկ դասեր
+<button className="bg-primary text-white hover:bg-primary-dark">
+  Գնել
+</button>
+
+// ❌ ՎԱՏ — կամայական արժեքներ
+<button className="bg-[#3B82F6] text-white">
+  Գնել
+</button>
+
+// ✅ ԼԱՎ — ստանդարտ spacing
+<div className="p-4 mt-6 gap-2">
+
+// ❌ ՎԱՏ — կամայական spacing
+<div className="p-[13px] mt-[22px]">
+```
+
+### clsx պայմանական դասերի համար
+
+```tsx
+import { clsx } from 'clsx';
+
+// ✅ Մաքուր պայմանական դասեր
+<button
+  className={clsx(
+    'px-4 py-2 rounded font-medium transition',
+    variant === 'primary' && 'bg-primary text-white',
+    variant === 'secondary' && 'bg-gray-100 text-gray-900',
+    disabled && 'opacity-50 cursor-not-allowed'
+  )}
+>
+  {children}
+</button>
+```
+
+### CVA կոմպոնենտների տարբերակների համար
+
+```tsx
+import { cva, type VariantProps } from 'class-variance-authority';
+
+const buttonVariants = cva(
+  'inline-flex items-center justify-center rounded-md font-medium transition-colors',
+  {
+    variants: {
+      variant: {
+        primary: 'bg-primary text-white hover:bg-primary/90',
+        secondary: 'bg-secondary text-white hover:bg-secondary/90',
+        outline: 'border-2 border-primary text-primary hover:bg-primary/10',
+        ghost: 'hover:bg-gray-100',
+      },
+      size: {
+        sm: 'h-8 px-3 text-sm',
+        md: 'h-10 px-4',
+        lg: 'h-12 px-6 text-lg',
+      },
+    },
+    defaultVariants: {
+      variant: 'primary',
+      size: 'md',
+    },
+  }
+);
+
+interface ButtonProps 
+  extends React.ButtonHTMLAttributes<HTMLButtonElement>,
+    VariantProps<typeof buttonVariants> {}
+
+export function Button({ variant, size, className, ...props }: ButtonProps) {
+  return (
+    <button 
+      className={buttonVariants({ variant, size, className })} 
+      {...props} 
+    />
+  );
+}
+```
+
+---
+
+## 🪝 ՀՈՒԿԵՐ
+
+### Հուկերի կանոններ
+
+```tsx
+// ✅ Հուկեր միայն վերին մակարդակում
+function Component() {
+  const [state, setState] = useState(false);
+  const data = useData();
+  
+  // ❌ ԱՐԳԵԼՎԱԾ — հուկ պայմանի ներսում
+  if (condition) {
+    const value = useSomething(); // ❌
+  }
+  
+  return <div />;
+}
+```
+
+### Կաստոմ հուկեր
+
+```tsx
+// ✅ Տվյալներ fetch-ելու հուկ
+function useProducts(filters: ProductFilters) {
+  const [state, setState] = useState<AsyncState<Product[]>>({
+    status: 'idle',
+  });
+  
+  useEffect(() => {
+    let cancelled = false;
+    
+    async function fetchProducts() {
+      setState({ status: 'loading' });
+      
+      try {
+        const products = await api.getProducts(filters);
+        if (!cancelled) {
+          setState({ status: 'success', data: products });
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setState({ status: 'error', error: error as Error });
+        }
+      }
+    }
+    
+    fetchProducts();
+    
+    return () => {
+      cancelled = true;
+    };
+  }, [filters]);
+  
+  return state;
+}
+```
+
+### useCallback և useMemo
+
+```tsx
+// ✅ useCallback — prop-ներով փոխանցվող ֆունկցիաների համար
+const handleClick = useCallback(() => {
+  onItemClick(item.id);
+}, [item.id, onItemClick]);
+
+// ✅ useMemo — թանկ հաշվարկների համար
+const sortedItems = useMemo(() => {
+  return [...items].sort((a, b) => a.price - b.price);
+}, [items]);
+
+// ❌ Չօգտագործել պարզ արժեքների համար
+const fullName = useMemo(() => `${first} ${last}`, [first, last]); // ավելորդ
+const fullName = `${first} ${last}`; // պարզապես հաշվի՛ր
+```
+
+---
+
+## 📁 ՖԱՅԼԵՐԻ ԿԱՌՈՒՑՎԱԾՔ
+
+### Feature-based կառուցվածք
+
+```
+features/
+├── products/
+│   ├── components/
+│   │   ├── ProductCard.tsx
+│   │   ├── ProductList.tsx
+│   │   ├── ProductFilters.tsx
+│   │   └── index.ts
+│   ├── hooks/
+│   │   ├── useProducts.ts
+│   │   ├── useProductFilters.ts
+│   │   └── index.ts
+│   ├── services/
+│   │   └── productService.ts
+│   ├── types.ts
+│   └── index.ts          # Ֆիչի հրապարակային API
+```
+
+### Barrel exports
+
+```tsx
+// features/products/index.ts
+export { ProductCard } from './components/ProductCard';
+export { ProductList } from './components/ProductList';
+export { ProductFilters } from './components/ProductFilters';
+export { useProducts } from './hooks/useProducts';
+export type { Product, ProductFilters as ProductFiltersType } from './types';
+
+// Import
+import { ProductCard, useProducts, Product } from '@/features/products';
+```
+
+---
+
+## 🚫 ԱՆՏԻՊԱՏԵՐՆԵՐ
+
+### Խուսափի՛ր prop drilling-ից
+
+```tsx
+// ❌ ՎԱՏ — user-ը փոխանցում ենք բոլոր մակարդակներով
+function App() {
+  const user = useUser();
+  return <Layout user={user}><Page user={user}><Component user={user} /></Page></Layout>;
+}
+
+// ✅ ԼԱՎ — Context կամ հուկ
+function Component() {
+  const user = useUser(); // հուկը ստանում է կոնտեքստից
+  return <div>{user.name}</div>;
+}
+```
+
+### Խուսափի՛ր inline օբյեկտներից prop-ներում
+
+```tsx
+// ❌ ՎԱՏ — ամեն ռենդերին նոր օբյեկտ
+<Component style={{ color: 'red' }} />
+<Component config={{ theme: 'dark', size: 'lg' }} />
+
+// ✅ ԼԱՎ — կայուն հղում
+const style = { color: 'red' };
+const config = useMemo(() => ({ theme: 'dark', size: 'lg' }), []);
+
+<Component style={style} />
+<Component config={config} />
+```
+
+### Խուսափի՛ր անանուն ֆունկցիաներից ռենդերում
+
+```tsx
+// ❌ ՎԱՏ — ամեն ռենդերին նոր ֆունկցիա
+{items.map(item => (
+  <Item key={item.id} onClick={() => handleClick(item.id)} />
+))}
+
+// ✅ ԼԱՎ — useCallback կամ տեղափոխի՛ր կոմպոնենտ
+const handleItemClick = useCallback((id: string) => {
+  // ...
+}, []);
+
+{items.map(item => (
+  <Item key={item.id} id={item.id} onClick={handleItemClick} />
+))}
+
+// Կամ կոմպոնենտն ինքը մշակում է
+function Item({ item, onClick }: ItemProps) {
+  const handleClick = () => onClick(item.id);
+  return <div onClick={handleClick}>{item.name}</div>;
+}
+```
+
+---
+
+## ⚡ ՕՊՏԻՄԻԶԱՑԻԱ
+
+### React.memo ցանկերի համար
+
+```tsx
+// ✅ memo ցանկի էլեմենտների համար
+export const ProductCard = memo(function ProductCard({ product }: Props) {
+  return <div>{product.name}</div>;
+});
+
+// Ծնողում
+{products.map(product => (
+  <ProductCard key={product.id} product={product} />
+))}
+```
+
+### Suspense և Loading States
+
+```tsx
+// app/products/page.tsx
+import { Suspense } from 'react';
+import { ProductList } from '@/features/products';
+import { ProductListSkeleton } from '@/features/products/components/ProductListSkeleton';
+
+export default function ProductsPage() {
+  return (
+    <Suspense fallback={<ProductListSkeleton />}>
+      <ProductList />
+    </Suspense>
+  );
+}
+```
+
+### Dynamic Imports
+
+```tsx
+import dynamic from 'next/dynamic';
+
+// Ծանր կոմպոնենտների lazy load
+const Chart = dynamic(() => import('@/components/Chart'), {
+  loading: () => <ChartSkeleton />,
+  ssr: false, // Միայն կլիենտում
+});
+
+const Modal = dynamic(() => import('@/components/Modal'));
+```
+
+---
+
+## 📋 CHECKLIST
+
+### Կոմպոնենտ
+
+- [ ] Անվանված export
+- [ ] Props-ը տիպացված interface-ով
+- [ ] Ճիշտ կարգ. imports → types → component → hooks → handlers → render
+- [ ] 'use client' միայն երբ պետք է
+- [ ] memo ցանկի կոմպոնենտների համար
+- [ ] Inline objects/functions prop-ներում չկան
+
+### Next.js
+
+- [ ] Server Components լռելյայն
+- [ ] Server Actions մուտացիաների համար
+- [ ] Suspense բեռնման համար
+- [ ] Metadata SEO-ի համար (տե՛ս ստորև)
+- [ ] Image component պատկերների համար
+
+---
+
+## 🔍 SEO
+
+### Metadata API (App Router)
+
+```typescript
+// app/layout.tsx — գլոբալ defaults
+import type { Metadata } from 'next';
+
+export const metadata: Metadata = {
+  metadataBase: new URL('https://example.com'),
+  title: {
+    default: 'My App',
+    template: '%s | My App',
+  },
+  description: 'Հավելվածի նկարագրություն',
+  openGraph: {
+    type: 'website',
+    locale: 'hy_AM',
+    siteName: 'My App',
+  },
+  robots: {
+    index: true,
+    follow: true,
+  },
+};
+```
+
+### Դինամիկ metadata (generateMetadata)
+
+```typescript
+// app/products/[id]/page.tsx
+import type { Metadata } from 'next';
+
+type Props = { params: Promise<{ id: string }> };
+
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  const { id } = await params;
+  const product = await getProduct(id);
+
+  return {
+    title: product.name,
+    description: product.description,
+    openGraph: {
+      title: product.name,
+      description: product.description,
+      images: [{ url: product.imageUrl, width: 1200, height: 630 }],
+    },
+  };
+}
+```
+
+### Structured Data (JSON-LD)
+
+```typescript
+// components/JsonLd.tsx
+export function JsonLd({ data }: { data: Record<string, unknown> }) {
+  return (
+    <script
+      type="application/ld+json"
+      dangerouslySetInnerHTML={{ __html: JSON.stringify(data) }}
+    />
+  );
+}
+
+// Օգտագործում ապրանքի էջում
+<JsonLd data={{
+  '@context': 'https://schema.org',
+  '@type': 'Product',
+  name: product.name,
+  description: product.description,
+  image: product.imageUrl,
+  offers: {
+    '@type': 'Offer',
+    price: product.price,
+    priceCurrency: 'USD',
+  },
+}} />
+```
+
+### Sitemap և robots
+
+```typescript
+// app/sitemap.ts
+import type { MetadataRoute } from 'next';
+
+export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
+  const products = await getAllProducts();
+  return [
+    { url: 'https://example.com', lastModified: new Date(), priority: 1 },
+    ...products.map((p) => ({
+      url: `https://example.com/products/${p.slug}`,
+      lastModified: p.updatedAt,
+      priority: 0.8,
+    })),
+  ];
+}
+
+// app/robots.ts
+import type { MetadataRoute } from 'next';
+
+export default function robots(): MetadataRoute.Robots {
+  return {
+    rules: { userAgent: '*', allow: '/', disallow: '/api/' },
+    sitemap: 'https://example.com/sitemap.xml',
+  };
+}
+```
+
+### SEO Checklist
+
+- [ ] `metadata` root layout-ում (title, description, OG)
+- [ ] `generateMetadata` դինամիկ էջերի համար
+- [ ] JSON-LD structured data հիմնական էնտիտիների համար
+- [ ] `sitemap.ts` բոլոր հրապարակային էջերի համար
+- [ ] `robots.ts` — թույլատրել ինդեքսացում, փակել /api/
+- [ ] Canonical URLs (`metadataBase`-ի միջոցով)
+- [ ] OG images (1200×630) հիմնական էջերի համար
+
+---
+
+**Տարբերակ.** 1.1
+**Ամսաթիվ.** 2026-02-12

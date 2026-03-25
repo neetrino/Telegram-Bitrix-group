@@ -1,0 +1,763 @@
+---
+description: API-ի նախագծման կանոններ։ Կիրառվում է REST endpoints-ին և կոնտրակտներին։
+globs: ["**/api/**", "**/*.controller.ts", "**/routes/**"]
+alwaysApply: false
+---
+
+# API-Ի ՆԱԽԱԳԾՄԱՆ ԿԱՆՈՆՆԵՐ
+
+> RESTful, համահունչ, փաստաթղթավորված API։
+
+---
+
+## 🎯 ՀԻՄՆԱԿԱՆ ՍԿԶԲՈՒՆՔՆԵՐ
+
+1. **REST լռելյայն** — ռեսուրսներ և HTTP մեթոդներ
+2. **Համահունչություն** — միասնական ֆորմատ ամենուր
+3. **Տարբերակավորում** — /api/v1/...
+4. **Փաստաթղթավորում** — OpenAPI/Swagger
+
+---
+
+## 🔗 URL ԿԱՌՈՒՑՎԱԾՔ
+
+### Անվանավորման կանոններ
+
+```
+✅ ՃԻՇՏ:
+GET    /api/v1/products          # Ցանկ
+GET    /api/v1/products/:id      # Մեկ տարր
+POST   /api/v1/products          # Ստեղծել
+PUT    /api/v1/products/:id      # Թարմացնել ամբողջությամբ
+PATCH  /api/v1/products/:id      # Թարմացնել մասնակի
+DELETE /api/v1/products/:id      # Ջնջել
+
+# Ներդրված ռեսուրսներ
+GET    /api/v1/orders/:orderId/items
+POST   /api/v1/orders/:orderId/items
+
+# Գործողություններ (երբ CRUD չէ)
+POST   /api/v1/orders/:id/cancel
+POST   /api/v1/orders/:id/refund
+POST   /api/v1/auth/login
+POST   /api/v1/auth/logout
+
+❌ ՍԽԱԼ:
+GET    /api/v1/getProducts       # Բայ URL-ում
+POST   /api/v1/createProduct     # Բայ URL-ում
+GET    /api/v1/product           # Եզակի թիվ
+DELETE /api/v1/products/delete/1 # Ավելորդ սեգմենտ
+```
+
+### Query պարամետրեր
+
+```
+# Էջավորում
+GET /api/v1/products?page=1&limit=20
+
+# Դասավորում
+GET /api/v1/products?sort=price&order=asc
+GET /api/v1/products?sort=-createdAt  # Մինուս = DESC
+
+# Ֆիլտրացում
+GET /api/v1/products?category=electronics&minPrice=1000&maxPrice=5000
+
+# Որոնում
+GET /api/v1/products?search=iphone
+
+# Կապերի ներառում
+GET /api/v1/products?include=category,variants
+
+# Դաշտերի ընտրություն
+GET /api/v1/products?fields=id,name,price
+```
+
+---
+
+## 📤 ՊԱՏԱՍԽԱՆԻ ՖՈՐՄԱՏ
+
+### Հաջող պատասխան (մեկ օբյեկտ)
+
+```json
+{
+  "data": {
+    "id": "clx123abc",
+    "name": "iPhone 15",
+    "price": 99900,
+    "category": {
+      "id": "clx456def",
+      "name": "Սմարթֆոններ"
+    },
+    "createdAt": "2024-01-15T10:30:00Z",
+    "updatedAt": "2024-01-15T10:30:00Z"
+  }
+}
+```
+
+### Հաջող պատասխան (ցանկ)
+
+```json
+{
+  "data": [
+    { "id": "clx123abc", "name": "iPhone 15" },
+    { "id": "clx456def", "name": "Samsung S24" }
+  ],
+  "meta": {
+    "total": 150,
+    "page": 1,
+    "limit": 20,
+    "totalPages": 8,
+    "hasNextPage": true,
+    "hasPrevPage": false
+  }
+}
+```
+
+### Սխալի պատասխան (RFC 7807)
+
+```json
+{
+  "type": "https://api.example.com/errors/validation",
+  "title": "Validation Error",
+  "status": 400,
+  "detail": "One or more fields have invalid values",
+  "instance": "/api/v1/products",
+  "errors": [
+    {
+      "field": "price",
+      "code": "INVALID_VALUE",
+      "message": "Price must be a positive number"
+    },
+    {
+      "field": "name",
+      "code": "REQUIRED",
+      "message": "Name is required"
+    }
+  ],
+  "timestamp": "2024-01-15T10:30:00Z",
+  "traceId": "abc-123-def"
+}
+```
+
+---
+
+## 📊 HTTP ՍՏԱՏՈՒՍԻ ԿՈԴԵՐ
+
+### Հաջող պատասխաններ (2xx)
+
+| Կոդ | Երբ օգտագործել |
+|-----|------------------|
+| 200 OK | GET, PUT, PATCH հաջող |
+| 201 Created | POST-ը ստեղծել է ռեսուրս |
+| 204 No Content | DELETE հաջող, body չկա |
+
+### Կլիենտի սխալներ (4xx)
+
+| Կոդ | Երբ օգտագործել |
+|-----|------------------|
+| 400 Bad Request | Անվավեր տվյալներ |
+| 401 Unauthorized | Նվիրագրված չէ |
+| 403 Forbidden | Մուտքի իրավունք չկա |
+| 404 Not Found | Ռեսուրսը չի գտնվել |
+| 409 Conflict | Կոնֆլիկտ (դուպլիկատ) |
+| 422 Unprocessable | Բիզնես-լոգիկայի վալիդացիա |
+| 429 Too Many Requests | Rate limit |
+
+### Սերվերի սխալներ (5xx)
+
+| Կոդ | Երբ օգտագործել |
+|-----|------------------|
+| 500 Internal Server Error | Անսպասելի սխալ |
+| 502 Bad Gateway | Upstream սերվիսի սխալ |
+| 503 Service Unavailable | Սերվիսը հասանելի չէ |
+
+---
+
+## 🔐 ՆՎԻՐԱԳՐՈՒՄ
+
+### JWT Bearer Token
+
+```http
+# Հարցում
+POST /api/v1/auth/login
+Content-Type: application/json
+
+{
+  "email": "user@example.com",
+  "password": "secret"
+}
+
+# Պատասխան
+{
+  "data": {
+    "accessToken": "eyJhbGciOiJIUzI1NiIs...",
+    "refreshToken": "eyJhbGciOiJIUzI1NiIs...",
+    "expiresIn": 3600,
+    "tokenType": "Bearer"
+  }
+}
+
+# Օգտագործում
+GET /api/v1/products
+Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
+```
+
+### Refresh Token
+
+```http
+POST /api/v1/auth/refresh
+Content-Type: application/json
+
+{
+  "refreshToken": "eyJhbGciOiJIUzI1NiIs..."
+}
+```
+
+---
+
+## 📝 ՄՈՒՏՔԱՅԻՆ ՏՎՅԱԼՆԵՐԻ ՎԱԼԻԴԱՑԻԱ
+
+### Next.js Route Handlers — վալիդացիա Zod-ով
+
+```typescript
+// app/api/products/route.ts
+import { NextRequest, NextResponse } from 'next/server';
+import { z } from 'zod';
+import { prisma } from '@/lib/prisma';
+
+const createProductSchema = z.object({
+  name: z.string().max(255),
+  description: z.string().max(5000).optional(),
+  price: z.number().min(0),
+  categoryId: z.string().uuid(),
+});
+
+export async function GET(req: NextRequest) {
+  const { searchParams } = req.nextUrl;
+  const page = Number(searchParams.get('page') ?? 1);
+  const limit = Math.min(Number(searchParams.get('limit') ?? 20), 100);
+
+  const [data, total] = await Promise.all([
+    prisma.product.findMany({ skip: (page - 1) * limit, take: limit }),
+    prisma.product.count(),
+  ]);
+
+  return NextResponse.json({
+    data,
+    meta: { page, limit, total, totalPages: Math.ceil(total / limit) },
+  });
+}
+
+export async function POST(req: NextRequest) {
+  const body = await req.json();
+  const parsed = createProductSchema.safeParse(body);
+  if (!parsed.success) {
+    return NextResponse.json(
+      {
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Մուտքային տվյալների վալիդացիայի սխալ',
+          details: parsed.error.flatten().fieldErrors,
+        },
+      },
+      { status: 422 },
+    );
+  }
+
+  const product = await prisma.product.create({ data: parsed.data });
+  return NextResponse.json({ data: product }, { status: 201 });
+}
+```
+
+### NestJS — DTO class-validator-ով վալիդացիա
+
+```typescript
+// dto/create-product.dto.ts
+import { 
+  IsString, 
+  IsNumber, 
+  IsOptional, 
+  Min, 
+  Max,
+  MaxLength,
+  IsUUID,
+  IsUrl,
+  IsArray,
+  ValidateNested,
+  ArrayMinSize,
+} from 'class-validator';
+import { Type } from 'class-transformer';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+
+export class CreateProductDto {
+  @ApiProperty({ 
+    description: 'Ապրանքի անուն',
+    example: 'iPhone 15 Pro',
+    maxLength: 255,
+  })
+  @IsString()
+  @MaxLength(255)
+  name: string;
+
+  @ApiPropertyOptional({ 
+    description: 'Ապրանքի նկարագրություն',
+    example: 'Նոր iPhone բարելավված խցիկով...',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(5000)
+  description?: string;
+
+  @ApiProperty({ 
+    description: 'Գին կոպեկներով',
+    example: 9990000,
+    minimum: 0,
+  })
+  @IsNumber()
+  @Min(0)
+  price: number;
+
+  @ApiProperty({ 
+    description: 'Կատեգորիայի ID',
+    example: 'clx123abc',
+  })
+  @IsUUID()
+  categoryId: string;
+
+  @ApiPropertyOptional({ 
+    description: 'Նկարներ',
+    type: [String],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsUrl({}, { each: true })
+  images?: string[];
+
+  @ApiPropertyOptional({ 
+    description: 'Ապրանքի տարբերակներ',
+    type: [CreateVariantDto],
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateVariantDto)
+  @ArrayMinSize(1)
+  variants?: CreateVariantDto[];
+}
+```
+
+### Վալիդացիայի սխալի պատասխան
+
+```json
+{
+  "type": "https://api.example.com/errors/validation",
+  "title": "Validation Error",
+  "status": 400,
+  "detail": "Request body validation failed",
+  "errors": [
+    {
+      "field": "price",
+      "code": "MIN",
+      "message": "price must not be less than 0",
+      "value": -100
+    },
+    {
+      "field": "name",
+      "code": "MAX_LENGTH",
+      "message": "name must be shorter than or equal to 255 characters",
+      "value": "very long name..."
+    }
+  ]
+}
+```
+
+---
+
+## 📖 SWAGGER ՓԱՍՏԱԹՂԹԱՎՈՐՈՒՄ
+
+### Կոնտրոլերի դեկորատորներ
+
+```typescript
+@Controller('products')
+@ApiTags('Products')
+@ApiBearerAuth()
+export class ProductsController {
+  
+  @Get()
+  @ApiOperation({ 
+    summary: 'Ստանալ ապրանքների ցանկ',
+    description: 'Վերադարձնում է էջավորված ապրանքների ցանկ ֆիլտրացիայով',
+  })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiQuery({ name: 'category', required: false, type: String })
+  @ApiResponse({ 
+    status: 200, 
+    description: 'Ապրանքների ցանկ',
+    type: PaginatedProductsResponse,
+  })
+  async findAll(@Query() query: ProductQueryDto) {
+    return this.productsService.findAll(query);
+  }
+
+  @Get(':id')
+  @ApiOperation({ summary: 'Ստանալ ապրանք ID-ով' })
+  @ApiParam({ name: 'id', description: 'Ապրանքի ID' })
+  @ApiResponse({ status: 200, description: 'Ապրանք', type: Product })
+  @ApiResponse({ status: 404, description: 'Ապրանքը չի գտնվել' })
+  async findOne(@Param('id', ParseUUIDPipe) id: string) {
+    return this.productsService.findOne(id);
+  }
+
+  @Post()
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  @ApiOperation({ summary: 'Ստեղծել ապրանք' })
+  @ApiBody({ type: CreateProductDto })
+  @ApiResponse({ status: 201, description: 'Ապրանքը ստեղծված է', type: Product })
+  @ApiResponse({ status: 400, description: 'Վալիդացիայի սխալ' })
+  @ApiResponse({ status: 401, description: 'Նվիրագրված չէ' })
+  @ApiResponse({ status: 403, description: 'Իրավունք չկա' })
+  async create(
+    @Body() dto: CreateProductDto,
+    @CurrentUser() user: User,
+  ) {
+    return this.productsService.create(dto, user);
+  }
+}
+```
+
+---
+
+## 🔄 ՏԱՐԲԵՐԱԿԱՎՈՐՈՒՄ
+
+### URL տարբերակավորում (խորհուրդ)
+
+```
+/api/v1/products
+/api/v2/products
+```
+
+### Տարբերակավորման կանոններ
+
+```typescript
+// ✅ Նոր տարբերակ երբ:
+// - Breaking changes պատասխանում
+// - Դաշտերի ջնջում
+// - Դաշտերի տիպերի փոփոխություն
+// - Վարքագծի փոփոխություն
+
+// ❌ Նոր տարբերակ ՉԷ պետք երբ:
+// - Նոր դաշտերի ավելացում
+// - Նոր endpoints-ի ավելացում
+// - Բագերի ուղղում
+// - Արտադրողականության բարելավում
+```
+
+### Մի քանի տարբերակների աջակցություն
+
+```typescript
+// Deprecation header
+app.use('/api/v1/*', (req, res, next) => {
+  res.setHeader('Deprecation', 'true');
+  res.setHeader('Sunset', 'Sat, 01 Jan 2025 00:00:00 GMT');
+  res.setHeader('Link', '</api/v2>; rel="successor-version"');
+  next();
+});
+```
+
+---
+
+## ⚡ ԱՐՏԱԴՐՈՂԱԿԱՆՈՒԹՅՈՒՆ
+
+### Rate Limiting
+
+> Լիմիտները — *ադապտիվ արժեք*։ Խորհուրդ. 50–200 req/min API-ի, 5–20 req/min auth endpoints-ի համար։ Հարցրու՛ մշակողին։
+
+```typescript
+// === Next.js — middleware + in-memory (serverless-ի համար) ===
+// middleware.ts (կամ օգտագործի՛ր Vercel KV / Upstash Redis distributed-ի համար)
+import { NextRequest, NextResponse } from 'next/server';
+
+const rateLimit = new Map<string, { count: number; resetTime: number }>();
+
+export function middleware(req: NextRequest) {
+  if (!req.nextUrl.pathname.startsWith('/api/')) return;
+
+  const ip = req.headers.get('x-forwarded-for') ?? 'unknown';
+  const now = Date.now();
+  const window = rateLimit.get(ip);
+
+  if (!window || now > window.resetTime) {
+    rateLimit.set(ip, { count: 1, resetTime: now + 60_000 });
+    return;
+  }
+
+  if (window.count >= 100) {
+    return NextResponse.json(
+      { error: { code: 'RATE_LIMIT', message: 'Too many requests' } },
+      { status: 429, headers: { 'Retry-After': '60' } },
+    );
+  }
+  window.count++;
+}
+
+// === NestJS — ThrottlerModule ===
+@Module({
+  imports: [
+    ThrottlerModule.forRoot({
+      ttl: 60,       // Պատուհան վայրկյաններով
+      limit: 100,    // Հարցումներ պատուհանում
+    }),
+  ],
+})
+export class AppModule {}
+
+// Per-endpoint
+@Throttle(10, 60) // 10 հարցում րոպեում
+@Post('login')
+async login() { ... }
+```
+
+### Cache-ավորում
+
+```typescript
+// Cache-Control headers
+@Get('products')
+@Header('Cache-Control', 'public, max-age=300') // 5 րոպե
+async findAll() { ... }
+
+// ETags
+@Get('products/:id')
+async findOne(@Param('id') id: string, @Res() res: Response) {
+  const product = await this.service.findOne(id);
+  const etag = generateEtag(product);
+  
+  res.setHeader('ETag', etag);
+  res.json({ data: product });
+}
+```
+
+### Սեղմում
+
+```typescript
+// main.ts
+import compression from 'compression';
+
+app.use(compression());
+```
+
+---
+
+## 🔔 WEBHOOKS
+
+### Webhooks-ի ուղարկում
+
+```typescript
+// services/webhook.service.ts
+@Injectable()
+export class WebhookService {
+  private readonly logger = new Logger(WebhookService.name);
+
+  async send(
+    url: string,
+    event: string,
+    payload: unknown,
+    secret: string,
+  ): Promise<void> {
+    const timestamp = Date.now();
+    const body = JSON.stringify({
+      event,
+      timestamp,
+      data: payload,
+    });
+
+    // Ստորագրություն վերահսկման համար
+    const signature = this.createSignature(body, secret, timestamp);
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Webhook-Signature': signature,
+          'X-Webhook-Timestamp': timestamp.toString(),
+          'X-Webhook-Event': event,
+        },
+        body,
+        signal: AbortSignal.timeout(10000), // 10s timeout
+      });
+
+      if (!response.ok) {
+        throw new Error(`Webhook failed: ${response.status}`);
+      }
+
+      this.logger.log(`Webhook sent: ${event} to ${url}`);
+    } catch (error) {
+      this.logger.error(`Webhook failed: ${event} to ${url}`, error);
+      // Դնել հերթում retry-ի համար
+      await this.queueRetry(url, event, payload, secret);
+    }
+  }
+
+  private createSignature(
+    body: string,
+    secret: string,
+    timestamp: number,
+  ): string {
+    const payload = `${timestamp}.${body}`;
+    return crypto
+      .createHmac('sha256', secret)
+      .update(payload)
+      .digest('hex');
+  }
+
+  private async queueRetry(...args: unknown[]) {
+    // Ավելացնել BullMQ-ում կրկնակի ուղարկման համար
+  }
+}
+```
+
+### Webhooks-ի ընդունում
+
+```typescript
+// === Next.js — app/api/webhooks/stripe/route.ts ===
+import { NextRequest, NextResponse } from 'next/server';
+import Stripe from 'stripe';
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
+
+export async function POST(req: NextRequest) {
+  const body = await req.text(); // raw body վերահսկման համար
+  const signature = req.headers.get('stripe-signature')!;
+
+  let event: Stripe.Event;
+  try {
+    event = stripe.webhooks.constructEvent(body, signature, process.env.STRIPE_WEBHOOK_SECRET!);
+  } catch {
+    return NextResponse.json({ error: 'Invalid signature' }, { status: 400 });
+  }
+
+  // Իդեմպոտենտություն + մշակում
+  await processStripeEvent(event);
+
+  return NextResponse.json({ received: true });
+}
+
+// === NestJS — controllers/webhook.controller.ts ===
+@Controller('webhooks')
+export class WebhookController {
+  
+  @Post('stripe')
+  async handleStripe(
+    @Body() body: unknown,
+    @Headers('stripe-signature') signature: string,
+  ) {
+    // Ստորագրության վերահսկում
+    const event = this.verifyStripeSignature(body, signature);
+    
+    // Իդեմպոտենտություն — ստուգում, որ արդեն չենք մշակել
+    const processed = await this.cache.get(`webhook:${event.id}`);
+    if (processed) {
+      return { received: true, duplicate: true };
+    }
+    
+    // Մշակում
+    await this.processEvent(event);
+    
+    // Նշել որպես մշակված
+    await this.cache.set(`webhook:${event.id}`, true, 86400 * 7); // 7 օր
+    
+    return { received: true };
+  }
+}
+```
+
+### Webhooks-ի կանոններ
+
+```markdown
+## Webhooks ուղարկելիս
+
+### Ստորագրություն
+- ✅ HMAC-SHA256 ստորագրություն header-ում
+- ✅ Timestamp replay attacks-ից պաշտպանության համար
+- ✅ Փաստաթղթավորել ստորագրության ֆորմատը
+
+### Retry ռազմավարություն
+- ✅ Exponential backoff: 1m, 5m, 30m, 2h, 24h
+- ✅ Առավելագույնը 5-10 փորձ
+- ✅ Լոգավորել բոլոր փորձերը
+- ✅ Ծանուցել վերջնական ձախողման դեպքում
+
+### Payload
+- ✅ Նվազագույն տվյալներ (id + event type)
+- ✅ Ստացողը մանրամասները API-ով պետք է հարցնի
+- ✅ Գաղտնի տվյալներ չուղարկել
+
+## Webhooks ընդունելիս
+
+### Վերահսկում
+- ✅ Ստուգել ստորագրությունը
+- ✅ Ստուգել timestamp (ոչ ավելի քան 5 րոպե)
+- ✅ Միայն HTTPS
+
+### Իդեմպոտենտություն
+- ✅ Պահել մշակված իրադարձությունների ID-ները
+- ✅ Կրկնության դեպքում — վերադարձնել 200, բայց չմշակել
+- ✅ ID-ները պահել առնվազն 7 օր
+
+### Մշակում
+- ✅ Արագ վերադարձնել 200 (< 3 վայրկյան)
+- ✅ Ծանր մշակում — հերթի մեջ
+- ✅ Լոգավորել բոլոր մուտքային իրադարձությունները
+```
+
+### Webhook իրադարձության ֆորմատ
+
+```json
+{
+  "id": "evt_123abc",
+  "event": "order.completed",
+  "timestamp": 1705312800000,
+  "data": {
+    "orderId": "ord_456def",
+    "status": "completed"
+  }
+}
+```
+
+---
+
+## 📋 ՍՏՈՒԳԱՑՈՒՑԱԿ
+
+### Նոր endpoint
+
+- [ ] RESTful URL կառուցվածք
+- [ ] Ճիշտ HTTP մեթոդ
+- [ ] Ճիշտ status կոդ
+- [ ] DTO վալիդացիայով
+- [ ] Swagger փաստաթղթավորում
+- [ ] Սխալների մշակում
+- [ ] Rate limiting (անհրաժեշտության դեպքում)
+- [ ] Ավթորիզացիա (անհրաժեշտության դեպքում)
+
+### API Review
+
+- [ ] Համահունչություն առկա endpoints-ի հետ
+- [ ] Breaking changes չկան
+- [ ] Պատասխանի ֆորմատը համապատասխանում է ստանդարտին
+- [ ] Էջավորում ցանկերի համար
+- [ ] Լոգավորում
+
+### Webhooks (եթե օգտագործվում են)
+
+- [ ] Ստորագրությունը իրականացված է (HMAC-SHA256)
+- [ ] Retry exponential backoff-ով
+- [ ] Իդեմպոտենտություն ընդունելիս
+- [ ] Timestamp-ը ստուգվում է
+- [ ] Փաստաթղթավորում ստացողների համար
+
+---
+
+**Տարբերակ.** 1.2
+**Ամսաթիվ.** 2026-02-12

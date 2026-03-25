@@ -1,0 +1,1114 @@
+---
+description: CI/CD-ի կանոններ։ GitHub Actions, pipeline-ներ, դեպլոյ։
+globs: [".github/**", "**/Dockerfile", "**/docker-compose*"]
+alwaysApply: false
+---
+
+# CI/CD-Ի ԿԱՆՈՆՆԵՐ
+
+> Ավտոմատացում = կոնսիստենտություն։ Յուրաքանչյուր commit անցնում է նույն ստուգումները։
+
+---
+
+## 🎯 ՀԻՄՆԱԿԱՆ ՍԿԶԲՈՒՆՔՆԵՐ
+
+1. **Fail Fast** — բռնում ենք սխալները որքան հնարավոր է շուտ
+2. **Ավտոմատացում** — նվազագույն ձեռքով գործողություններ
+3. **Reproducible** — նույն արդյունք ամեն անգամ
+4. **Անվտանգություն** — գաղտնիքները GitHub Secrets-ում
+
+---
+
+## 📦 PIPELINE-Ի ԿԱՐԳՈՒՑՎԱԿՔ
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                       CI PIPELINE                           │
+├─────────┬─────────┬─────────┬─────────┬─────────┬──────────┤
+│ Install │  Lint   │  Type   │  Test   │  Build  │ Security │
+│         │         │  Check  │         │         │  Audit   │
+│  deps   │ ESLint  │   tsc   │  Jest   │ Next.js │   npm    │
+│         │ Prettier│         │Playwright│         │  audit   │
+└─────────┴─────────┴─────────┴─────────┴─────────┴──────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                       CD PIPELINE                           │
+├─────────────────┬─────────────────┬─────────────────────────┤
+│     Preview     │     Staging     │      Production         │
+│                 │                 │                         │
+│   PR preview    │   develop →     │   main →                │
+│   environments  │   staging env   │   production env        │
+└─────────────────┴─────────────────┴─────────────────────────┘
+```
+
+---
+
+## 🔧 GITHUB ACTIONS
+
+### CI Workflow
+
+```yaml
+# .github/workflows/ci.yml
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+# Չեղարկել նախորդ գործարկումները նույն PR-ի համար
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '20'
+  PNPM_VERSION: '9'
+
+jobs:
+  # ==========================================
+  # LINT & TYPECHECK
+  # ==========================================
+  lint:
+    name: Lint & Typecheck
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Type check
+        run: pnpm type-check
+
+      - name: Format check
+        run: pnpm format:check
+
+  # ==========================================
+  # TEST
+  # ==========================================
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: lint
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma Client
+        run: pnpm prisma generate
+
+      - name: Run migrations
+        run: pnpm prisma migrate deploy
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/test
+
+      - name: Run unit tests
+        run: pnpm test:unit
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/test
+
+      - name: Run integration tests
+        run: pnpm test:integration
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/test
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v3
+        with:
+          files: ./coverage/lcov.info
+          fail_ci_if_error: false
+
+  # ==========================================
+  # BUILD
+  # ==========================================
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+        env:
+          # Նվազագույն env build-ի համար
+          NEXT_PUBLIC_API_URL: https://api.example.com
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build
+          path: .next
+          retention-days: 1
+
+  # ==========================================
+  # SECURITY
+  # ==========================================
+  security:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Audit dependencies
+        run: pnpm audit --prod
+        continue-on-error: true  # Չարգելափակենք, բայց ցույց տանք
+
+      - name: Check for secrets
+        uses: trufflesecurity/trufflehog@main
+        with:
+          extra_args: --only-verified
+```
+
+### CD Workflow
+
+```yaml
+# .github/workflows/deploy.yml
+name: Deploy
+
+on:
+  push:
+    branches: [main, develop]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+
+jobs:
+  # ==========================================
+  # DEPLOY STAGING (develop branch)
+  # ==========================================
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/develop'
+    environment:
+      name: staging
+      url: https://staging.example.com
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy to Vercel (Staging)
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          vercel-args: '--prod --env staging'
+          alias-domains: staging.example.com
+
+  # ==========================================
+  # DEPLOY PRODUCTION (main branch)
+  # ==========================================
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment:
+      name: production
+      url: https://example.com
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Database migrations
+      - name: Run migrations
+        run: |
+          pnpm prisma migrate deploy
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      - name: Deploy to Vercel (Production)
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          vercel-args: '--prod'
+
+      - name: Notify on success
+        if: success()
+        run: |
+          curl -X POST ${{ secrets.SLACK_WEBHOOK }} \
+            -H 'Content-type: application/json' \
+            -d '{"text":"✅ Deployed to production: ${{ github.sha }}"}'
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          curl -X POST ${{ secrets.SLACK_WEBHOOK }} \
+            -H 'Content-type: application/json' \
+            -d '{"text":"❌ Production deploy failed: ${{ github.sha }}"}'
+```
+
+### Preview Deployments
+
+```yaml
+# .github/workflows/preview.yml
+name: Preview
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  preview:
+    name: Deploy Preview
+    runs-on: ubuntu-latest
+    environment:
+      name: preview
+      url: ${{ steps.deploy.outputs.preview-url }}
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy Preview
+        id: deploy
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+
+      - name: Comment PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `🚀 Preview deployed: ${{ steps.deploy.outputs.preview-url }}`
+            })
+```
+
+---
+
+## 🐳 DOCKER
+
+### Dockerfile (Production)
+
+```dockerfile
+# Dockerfile
+# Multi-stage build նվազագույն image-ի համար
+
+# ==========================================
+# DEPENDENCIES
+# ==========================================
+FROM node:20-alpine AS deps
+WORKDIR /app
+
+# Native modules-ի կախվածություններ
+RUN apk add --no-cache libc6-compat
+
+# Package ֆայլեր
+COPY package.json pnpm-lock.yaml ./
+COPY prisma ./prisma/
+
+# Կախվածություններ
+RUN corepack enable pnpm && pnpm install --frozen-lockfile
+
+# ==========================================
+# BUILDER
+# ==========================================
+FROM node:20-alpine AS builder
+WORKDIR /app
+
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+
+# Prisma Client գեներացիա
+RUN corepack enable pnpm && pnpm prisma generate
+
+# Հավելվածի build
+ENV NEXT_TELEMETRY_DISABLED 1
+RUN pnpm build
+
+# ==========================================
+# RUNNER
+# ==========================================
+FROM node:20-alpine AS runner
+WORKDIR /app
+
+ENV NODE_ENV production
+ENV NEXT_TELEMETRY_DISABLED 1
+
+# Օգտատիրոջ ստեղծում (ոչ root)
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 nextjs
+
+# Միայն անհրաժեշտը
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
+COPY --from=builder /app/prisma ./prisma
+
+# Թղթապանակների իրավունքներ
+RUN chown -R nextjs:nodejs /app
+
+USER nextjs
+
+EXPOSE 3000
+
+ENV PORT 3000
+ENV HOSTNAME "0.0.0.0"
+
+CMD ["node", "server.js"]
+```
+
+### docker-compose (Development)
+
+```yaml
+# docker-compose.yml
+version: '3.8'
+
+services:
+  # PostgreSQL
+  postgres:
+    image: postgres:15-alpine
+    container_name: app-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-app}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-password}
+      POSTGRES_DB: ${DB_NAME:-app}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - '5432:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${DB_USER:-app}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis
+  redis:
+    image: redis:7-alpine
+    container_name: app-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    ports:
+      - '6379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # App (production-like testing-ի համար)
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: app
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${DB_USER:-app}:${DB_PASSWORD:-password}@postgres:5432/${DB_NAME:-app}
+      REDIS_URL: redis://redis:6379
+      NODE_ENV: production
+    ports:
+      - '3000:3000'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  redis-data:
+```
+
+---
+
+## 📜 SCRIPTS (package.json)
+
+### Base scripts — Next.js
+
+> CI quality pipeline template: `reference/workflows/ci-quality.yml.example`
+
+```json
+{
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+
+    "format": "prettier . --write",
+    "format:check": "prettier . --check",
+
+    "lint": "next lint --max-warnings=0",
+    "typecheck": "tsc --noEmit",
+
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage",
+
+    "ci:check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+
+    "prepare": "husky"
+  }
+}
+```
+
+### Prisma scripts (add when using Prisma)
+
+```json
+{
+  "scripts": {
+    "typecheck": "prisma generate && tsc --noEmit",
+
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:migrate:deploy": "prisma migrate deploy",
+    "db:push": "prisma db push",
+    "db:seed": "prisma db seed",
+    "db:studio": "prisma studio"
+  }
+}
+```
+
+### E2E scripts (add when stable user flows exist)
+
+```json
+{
+  "scripts": {
+    "test:e2e": "playwright test"
+  }
+}
+```
+
+### Docker scripts (only for self-hosted)
+
+```json
+{
+  "scripts": {
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down",
+    "docker:logs": "docker-compose logs -f"
+  }
+}
+```
+
+### NestJS scripts (Size B/C — separate backend)
+
+```json
+{
+  "scripts": {
+    "lint": "eslint . --max-warnings=0",
+    "test": "jest --passWithNoTests",
+    "test:e2e": "jest --config ./test/jest-e2e.json",
+    "build": "nest build"
+  }
+}
+```
+
+---
+
+## 🔐 СЕКРЕТЫ
+
+### GitHub Secrets
+
+```markdown
+## Պարտադիր գաղտնիքներ
+
+| Գաղտնիք | Նկարագրություն |
+|--------|----------|
+| `DATABASE_URL` | Connection string ԲԴ-ին |
+| `VERCEL_TOKEN` | Vercel token |
+| `VERCEL_ORG_ID` | Vercel org ID |
+| `VERCEL_PROJECT_ID` | Vercel project ID |
+
+## Ընտրովի
+
+| Գաղտնիք | Նկարագրություն |
+|--------|----------|
+| `SLACK_WEBHOOK` | Webhook ծանուցումների համար |
+| `CODECOV_TOKEN` | Codecov token |
+| `SENTRY_DSN` | Sentry DSN |
+```
+
+### Environments
+
+```yaml
+# GitHub Environments:
+# - preview (PR-ի համար)
+# - staging (develop branch)
+# - production (main branch, approval է պահանջում)
+```
+
+---
+
+## 🚩 FEATURE FLAGS
+
+### Ինչու են պետք
+
+- Նոր ֆիչերի աստիճանական rollout
+- A/B թեստավորում
+- Խնդրահարույց ֆիչերի kill switch
+- Deploy և release-ի բաժանում
+
+### Պարզ իրականացում
+
+```typescript
+// lib/feature-flags.ts
+
+type FeatureFlag = {
+  enabled: boolean;
+  percentage?: number;  // Աստիճանական rollout-ի համար
+  allowedUsers?: string[];  // Beta tester-ների համար
+};
+
+const FLAGS: Record<string, FeatureFlag> = {
+  'new-checkout': {
+    enabled: true,
+    percentage: 10,  // 10% օգտատերեր
+  },
+  'dark-mode': {
+    enabled: true,
+    allowedUsers: ['user-123', 'user-456'],
+  },
+  'experimental-search': {
+    enabled: false,
+  },
+};
+
+export function isFeatureEnabled(
+  flagName: string,
+  userId?: string,
+): boolean {
+  const flag = FLAGS[flagName];
+  if (!flag || !flag.enabled) return false;
+
+  // Ստուգում ենք թույլատրված ցանկը
+  if (flag.allowedUsers?.includes(userId ?? '')) {
+    return true;
+  }
+
+  // Ստուգում ենք տոկոսը
+  if (flag.percentage !== undefined && userId) {
+    const hash = simpleHash(userId + flagName);
+    return (hash % 100) < flag.percentage;
+  }
+
+  return flag.enabled;
+}
+
+function simpleHash(str: string): number {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) - hash) + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash);
+}
+```
+
+### Օգտագործում
+
+```tsx
+// React կոմպոնենտում
+function CheckoutPage() {
+  const { user } = useAuth();
+  const showNewCheckout = isFeatureEnabled('new-checkout', user?.id);
+
+  if (showNewCheckout) {
+    return <NewCheckout />;
+  }
+  return <OldCheckout />;
+}
+
+// В API
+@Get('search')
+async search(@Query() query: SearchDto, @CurrentUser() user: User) {
+  if (isFeatureEnabled('experimental-search', user?.id)) {
+    return this.experimentalSearch(query);
+  }
+  return this.classicSearch(query);
+}
+```
+
+### Ընդլայնված լուծումներ
+
+```markdown
+## Feature Flags սերվիսներ
+
+| Սերվիս | Իր plus-երը | Minus-ներ |
+|--------|-------|--------|
+| LaunchDarkly | Հզոր, A/B, analytics | Թանկ |
+| Unleash | Open source, self-hosted | Պետք է host անել |
+| ConfigCat | Պարզ, էժան | Ավելի քիչ ֆիչեր |
+| Flagsmith | Open source, լավ UI | Երիտասարդ |
+| Env vars | Անվճար, պարզ | Redeploy է պահանջում |
+```
+
+### Environment-based flags
+
+```typescript
+// Պարզ տարբերակ env-ով
+const FEATURES = {
+  NEW_CHECKOUT: process.env.FEATURE_NEW_CHECKOUT === 'true',
+  DARK_MODE: process.env.FEATURE_DARK_MODE === 'true',
+};
+
+// .env.staging
+FEATURE_NEW_CHECKOUT=true
+FEATURE_DARK_MODE=true
+
+// .env.production
+FEATURE_NEW_CHECKOUT=false
+FEATURE_DARK_MODE=true
+```
+
+### Feature Flags-ի կանոններ
+
+```markdown
+## Best Practices
+
+### Անվանում
+- ✅ `new-checkout`, `experimental-search`
+- ❌ `flag1`, `test`, `temp`
+
+### Lifecycle
+1. Ստեղծել flag (disabled)
+2. Միացնել dev/staging-ի համար
+3. Աստիճանական rollout prod-ում (10% → 50% → 100%)
+4. Ջնջել flag-ը և հին կոդը
+
+### Հիգիենա
+- ✅ Ջնջել flag-երը ամբողջական rollout-ից հետո
+- ✅ Փաստաթղթավորել յուրաքանչյուր flag-ի նշանակությունը
+- ✅ Սահմանել expiration date
+- ❌ Հարյուրավոր flag-եր չկուտակել
+
+### Մոնիտորինգ
+- ✅ Լոգավորել, թե որ տարբերակն է ցուցադրվել
+- ✅ Մետրիկներ յուրաքանչյուր տարբերակի համար
+- ✅ Ալերտներ նոր տարբերակի խնդիրների դեպքում
+```
+
+---
+
+## ☁️ MANAGED PLATFORMS (Vercel, Railway, Render, Fly.io)
+
+> Եթե դեպլոյ managed պլատֆորմաներում է — Docker և K8s սեկցիաները վերևում պետք չեն։
+
+### Պլատֆորմների համեմատություն
+
+```markdown
+| Պլատֆորմա | Best for | Բնութագրեր |
+|-----------|----------|-------------|
+| **Vercel** | Next.js, Frontend | Edge Functions, ISR, իդեալ Next.js-ի համար |
+| **Railway** | Full-stack, API | Պարզ, լավ DX, ավելի էժան Vercel-ից backend-ի համար |
+| **Render** | Full-stack | Անվճար tier, background workers |
+| **Fly.io** | Global, Edge | Կոնտեյներներ մոտ օգտատերերին, low latency |
+```
+
+### Vercel (Next.js)
+
+```markdown
+## Ինչ Vercel-ը ավտոմատ անում է
+
+- ✅ Build և deploy push-ի դեպքում
+- ✅ Preview deployment յուրաքանչյուր PR-ի համար
+- ✅ SSL սերտիֆիկատներ
+- ✅ CDN / Edge Network
+- ✅ Environment variables management
+- ✅ Analytics и Speed Insights
+- ✅ Ինտեգրացիա Neon-ի հետ (auto DB branches)
+
+## Կարգավորում
+
+1. Միացնել GitHub repo
+2. Ընտրել Framework Preset. Next.js
+3. Կարգավորել Environment Variables
+4. Deploy
+```
+
+```typescript
+// vercel.json (ընտրովի, custom-ի համար)
+{
+  "framework": "nextjs",
+  "regions": ["iad1"],  // US East (մոտ Neon-ին)
+  "env": {
+    "NEXT_PUBLIC_API_URL": "https://api.example.com"
+  },
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-store" }
+      ]
+    }
+  ]
+}
+```
+
+### Railway
+
+```markdown
+## Когда использовать
+
+- Backend API (NestJS, Express)
+- Cron jobs / background workers
+- Полноценные приложения (не только frontend)
+- Нужна БД и другие сервисы рядом
+
+## Что Railway делает
+
+- ✅ Auto-deploy push-ի դեպքում
+- ✅ Preview environments
+- ✅ Ներկառուցված սերվիսներ (Postgres, Redis և այլն)
+- ✅ Private ցանց սերվիսների միջև
+- ✅ Logs և metrics
+
+## Կարգավորում
+
+1. New Project → Deploy from GitHub
+2. Railway-ն ավտոմատ որոշում է framework-ը
+3. Add Variables
+4. Deploy
+```
+
+```toml
+# railway.toml (ընտրովի)
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "pnpm start:prod"
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+restartPolicyType = "on_failure"
+```
+
+### Render
+
+```markdown
+## Когда использовать
+
+- Нужен бесплатный tier
+- Background workers / Cron
+- Static sites
+- Простые API
+
+## Բնութագրեր
+
+- ✅ Free tier (սահմանափակումներով)
+- ✅ Auto-deploy
+- ✅ Background workers
+- ⚠️ Cold start-եր free tier-ում
+```
+
+```yaml
+# render.yaml — NestJS backend Render-ում
+services:
+  - type: web
+    name: nestjs-api
+    runtime: docker                      # Dockerfile NestJS-ի համար
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health/live
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false                      # Ձեռքով (Neon pooler URL)
+      - key: DIRECT_URL
+        sync: false                      # Neon direct URL միգրացիաների համար
+      - key: PORT
+        value: 3000
+```
+
+```dockerfile
+# Dockerfile — NestJS Render-ում
+FROM node:20-alpine AS base
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
+FROM base AS deps
+WORKDIR /app
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile --prod=false
+
+FROM base AS build
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+RUN pnpm prisma generate && pnpm build
+
+FROM base AS production
+WORKDIR /app
+ENV NODE_ENV=production
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
+COPY --from=build /app/prisma ./prisma
+COPY package.json pnpm-lock.yaml ./
+
+EXPOSE 3000
+CMD ["node", "dist/main.js"]
+```
+
+### Fly.io
+
+```markdown
+## Когда использовать
+
+- Нужна low latency globally
+- Edge computing
+- Контейнеры с полным контролем
+- WebSockets / real-time apps
+
+## Բնութագրեր
+
+- ✅ Դեպլոյ տարածաշրջաններում մոտ օգտատերերին
+- ✅ Fly Machines (կոնտեյներներ)
+- ✅ Ներկառուցված Postgres և Redis
+- ✅ Private networking
+- ⚠️ Ավելի բարդ քան Vercel/Railway
+```
+
+```toml
+# fly.toml
+app = "my-app"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+
+[[services]]
+  protocol = "tcp"
+  internal_port = 3000
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+  [[services.http_checks]]
+    path = "/health"
+    interval = 10000
+    timeout = 2000
+```
+
+### Что НЕ нужно с managed платформами
+
+```markdown
+## Можно пропустить
+
+- ❌ Писать Dockerfile (Vercel, Railway)
+- ❌ Настраивать Nginx/reverse proxy
+- ❌ SSL сертификаты
+- ❌ CI/CD pipelines для deploy (встроено)
+- ❌ Kubernetes манифесты
+- ❌ docker-compose для production
+
+## Всё равно нужно
+
+- ✅ GitHub Actions для CI (lint, test, typecheck)
+- ✅ Environment variables настроить
+- ✅ Health check endpoint (/health или /api/health)
+- ✅ Мониторинг (Vercel Analytics, Sentry, etc.)
+```
+
+### Миграции БД на managed платформах
+
+```markdown
+## Vercel + Neon
+
+# В package.json
+"scripts": {
+  "postinstall": "prisma generate",
+  "vercel-build": "prisma generate && prisma migrate deploy && next build"
+}
+
+## Railway
+
+# В настройках Deploy Command:
+pnpm prisma migrate deploy && pnpm start:prod
+
+## Или через GitHub Actions (рекомендуется для production)
+
+- Миграции запускать отдельным шагом
+- Проверять что миграция безопасна (не удаляет данные)
+- Делать backup перед миграцией
+```
+
+---
+
+## 📋 CHECKLIST
+
+### CI Pipeline (GitHub Actions)
+
+- [ ] Lint (ESLint)
+- [ ] Format check (Prettier)
+- [ ] Type check (TypeScript)
+- [ ] Unit tests
+- [ ] Integration tests
+- [ ] Build
+- [ ] Security audit
+
+### CD Pipeline (Managed Platforms)
+
+- [ ] Preview deployments для PR *(автоматически на Vercel/Railway)*
+- [ ] Staging environment настроен
+- [ ] Production deploy (main branch)
+- [ ] Database migrations
+- [ ] Environment variables настроены
+- [ ] Health check endpoint работает
+
+### Docker (только если self-hosted или Fly.io)
+
+- [ ] Multi-stage build
+- [ ] Non-root user
+- [ ] Health checks
+- [ ] .dockerignore настроен
+
+### Vercel Checklist
+
+- [ ] Framework Preset правильный (Next.js)
+- [ ] Environment Variables настроены
+- [ ] Neon Integration подключена (если используется)
+- [ ] Custom domain настроен
+- [ ] Analytics включён
+
+### Railway/Render Checklist
+
+- [ ] Repo подключён
+- [ ] Build/Start commands настроены
+- [ ] Environment Variables настроены
+- [ ] Health check работает
+
+### Feature Flags (если используются)
+
+- [ ] Флаги документированы
+- [ ] Есть kill switch для критичных фич
+- [ ] Старые флаги удаляются
+- [ ] Логирование какой вариант показан
+
+---
+
+---
+
+## 📦 УПРАВЛЕНИЕ ЗАВИСИМОСТЯМИ
+
+### Стратегия обновлений
+
+| Тип обновления | Действие | Когда |
+|----------------|----------|-------|
+| Patch (x.x.1 → x.x.2) | Обновляй сразу | В рабочем PR или отдельным коммитом |
+| Minor (x.1.0 → x.2.0) | Обновляй в течение недели | После проверки changelog |
+| Major (1.x → 2.x) | Планируй миграцию | Отдельная задача, тесты обязательны |
+
+### Lockfile
+
+- ✅ Всегда коммить `pnpm-lock.yaml` (или `package-lock.json`)
+- ✅ `pnpm install --frozen-lockfile` в CI
+- ❌ Не удаляй lockfile для "исправления проблем"
+
+### Аудит безопасности
+
+```bash
+# Ежемесячно (или в CI)
+pnpm audit
+pnpm audit --fix  # Автоисправление patch-уязвимостей
+```
+
+### Правила
+
+- ✅ Используй точные версии в `dependencies` (без `^`)
+- ✅ `pnpm audit` в CI pipeline *(минимум ежемесячно)*
+- ✅ Проверяй changelog при обновлении minor/major
+- ✅ Обнови lockfile при добавлении зависимости
+- ❌ Не добавляй зависимость без обоснования (предпочти встроенное решение)
+- ❌ Не используй deprecated пакеты
+
+---
+
+**Версия:** 1.3
+**Дата:** 2026-02-12

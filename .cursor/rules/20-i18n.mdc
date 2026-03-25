@@ -1,0 +1,477 @@
+---
+description: Ինտերնացիոնալացման (i18n) կանոններ։ Լոկալիզացիա, ֆորմատավորում, բազմալեզու։
+globs: ["**/*.tsx", "**/locales/**", "**/i18n/**", "**/translations/**"]
+alwaysApply: false
+---
+
+# ԻՆՏԵՐՆԱՑԻՈՆԱԼԱՑՄԱՆ ԿԱՆՈՆՆԵՐ (i18n)
+
+> Աշխարհը մեկից ավելի լեզու ունի։ Նախատեսի՛ր i18n-ը սկզբից, հետո մի ավելացնի։
+
+---
+
+## 🎯 ՀԻՄՆԱԿԱՆ ՍԿԶԲՈՒՆՔՆԵՐ
+
+1. **Externalise strings** — բոլոր տեքստերը առանձին ֆայլերում
+2. **Ֆորմատավորում լոկալով** — ամսաթվեր, թվեր, արժույթներ
+3. **RTL support** — եթե արաբական/եբրայերեն տարբերակ է պետք
+4. **Fallback** — եթե թարգմանություն չկա, ցուցադրել default
+
+---
+
+## 🌐 NEXT.JS I18N
+
+### Կարգավորում (App Router)
+
+```typescript
+// middleware.ts — լեզվի որոշում middleware-ով
+import { NextRequest, NextResponse } from 'next/server';
+
+const locales = ['en', 'ru', 'hy'];
+const defaultLocale = 'en';
+
+export function middleware(request: NextRequest) {
+  const { pathname } = request.nextUrl;
+
+  // Ստուգում. locale URL-ում կա՞
+  const pathnameHasLocale = locales.some(
+    (locale) => pathname.startsWith(`/${locale}/`) || pathname === `/${locale}`
+  );
+
+  if (pathnameHasLocale) return;
+
+  // Որոշում locale-ը Accept-Language header-ից
+  const locale = request.headers.get('accept-language')?.split(',')[0]?.split('-')[0] ?? defaultLocale;
+  const resolvedLocale = locales.includes(locale) ? locale : defaultLocale;
+
+  const url = new URL(`/${resolvedLocale}${pathname}`, request.url);
+  return NextResponse.redirect(url);
+}
+
+export const config = {
+  matcher: ['/((?!api|_next/static|_next/image|favicon.ico).*)'],
+};
+```
+
+### Ֆայլերի կառուցվածք
+
+```
+src/
+├── app/
+│   └── [locale]/           # Դինամիկ սեգմենտ լեզվի համար
+│       ├── layout.tsx
+│       ├── page.tsx
+│       └── products/
+│           └── page.tsx
+│
+├── locales/
+│   ├── en/
+│   │   ├── common.json     # Ընդհանուր տողեր
+│   │   ├── auth.json       # Աուտորիզացիա
+│   │   ├── products.json   # Ապրանքներ
+│   │   └── errors.json     # Սխալներ
+│   ├── ru/
+│   │   ├── common.json
+│   │   └── ...
+│   └── hy/
+│       ├── common.json
+│       └── ...
+│
+└── lib/
+    └── i18n/
+        ├── index.ts        # Գլխավոր export
+        ├── config.ts       # Կոնֆիգուրացիա
+        └── getDictionary.ts
+```
+
+### Թարգմանությունների ֆայլերի ձևաչափ
+
+```json
+// locales/en/common.json
+{
+  "nav": {
+    "home": "Home",
+    "products": "Products",
+    "cart": "Cart",
+    "account": "Account"
+  },
+  "buttons": {
+    "submit": "Submit",
+    "cancel": "Cancel",
+    "save": "Save",
+    "delete": "Delete"
+  },
+  "messages": {
+    "loading": "Loading...",
+    "error": "Something went wrong",
+    "success": "Success!"
+  }
+}
+
+// locales/ru/common.json
+{
+  "nav": {
+    "home": "Главная",
+    "products": "Товары",
+    "cart": "Корзина",
+    "account": "Аккаунт"
+  },
+  "buttons": {
+    "submit": "Отправить",
+    "cancel": "Отмена",
+    "save": "Сохранить",
+    "delete": "Удалить"
+  },
+  "messages": {
+    "loading": "Загрузка...",
+    "error": "Что-то пошло не так",
+    "success": "Успешно!"
+  }
+}
+```
+
+### Թարգմանությունների ստացում (Server Components)
+
+```typescript
+// lib/i18n/getDictionary.ts
+import 'server-only';
+
+const dictionaries = {
+  en: () => import('@/locales/en/common.json').then((m) => m.default),
+  ru: () => import('@/locales/ru/common.json').then((m) => m.default),
+  hy: () => import('@/locales/hy/common.json').then((m) => m.default),
+};
+
+export type Locale = keyof typeof dictionaries;
+
+export async function getDictionary(locale: Locale) {
+  return dictionaries[locale]();
+}
+
+// Օգտագործում Server Component-ում
+// app/[locale]/page.tsx
+export default async function Page({ params }: { params: { locale: Locale } }) {
+  const dict = await getDictionary(params.locale);
+  
+  return (
+    <main>
+      <h1>{dict.nav.home}</h1>
+      <button>{dict.buttons.submit}</button>
+    </main>
+  );
+}
+```
+
+### Client Components (next-intl)
+
+```typescript
+// Տեղադրում. pnpm add next-intl
+
+// lib/i18n/config.ts
+import { getRequestConfig } from 'next-intl/server';
+
+export default getRequestConfig(async ({ locale }) => ({
+  messages: (await import(`@/locales/${locale}/common.json`)).default,
+}));
+
+// Օգտագործում Client Component-ում
+'use client';
+
+import { useTranslations } from 'next-intl';
+
+export function ProductCard({ product }: Props) {
+  const t = useTranslations('products');
+  
+  return (
+    <div>
+      <h3>{product.name}</h3>
+      <button>{t('addToCart')}</button>
+    </div>
+  );
+}
+```
+
+---
+
+## 🔢 ՖՈՐՄԱՏԱՎՈՐՈՒՄ
+
+### Թվեր
+
+```typescript
+// lib/i18n/formatters.ts
+
+export function formatNumber(
+  value: number,
+  locale: string,
+  options?: Intl.NumberFormatOptions,
+): string {
+  return new Intl.NumberFormat(locale, options).format(value);
+}
+
+// Օգտագործում
+formatNumber(1234567.89, 'en');    // "1,234,567.89"
+formatNumber(1234567.89, 'ru');    // "1 234 567,89"
+formatNumber(1234567.89, 'de');    // "1.234.567,89"
+```
+
+### Արժույթներ
+
+```typescript
+export function formatCurrency(
+  amount: number,
+  currency: string,
+  locale: string,
+): string {
+  return new Intl.NumberFormat(locale, {
+    style: 'currency',
+    currency,
+  }).format(amount);
+}
+
+// Օգտագործում
+formatCurrency(99.99, 'USD', 'en');    // "$99.99"
+formatCurrency(99.99, 'RUB', 'ru');    // "99,99 ₽"
+formatCurrency(99.99, 'AMD', 'hy');    // "99,99 ֏"
+formatCurrency(99.99, 'EUR', 'de');    // "99,99 €"
+```
+
+### Ամսաթվեր
+
+```typescript
+export function formatDate(
+  date: Date | string,
+  locale: string,
+  options?: Intl.DateTimeFormatOptions,
+): string {
+  const d = typeof date === 'string' ? new Date(date) : date;
+  
+  return new Intl.DateTimeFormat(locale, {
+    dateStyle: 'medium',
+    ...options,
+  }).format(d);
+}
+
+export function formatDateTime(
+  date: Date | string,
+  locale: string,
+): string {
+  const d = typeof date === 'string' ? new Date(date) : date;
+  
+  return new Intl.DateTimeFormat(locale, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(d);
+}
+
+// Օգտագործում
+formatDate(new Date(), 'en');    // "Jan 15, 2024"
+formatDate(new Date(), 'ru');    // "15 янв. 2024 г."
+formatDate(new Date(), 'de');    // "15.01.2024"
+```
+
+### Հարաբերական ժամանակ
+
+```typescript
+export function formatRelativeTime(
+  date: Date | string,
+  locale: string,
+): string {
+  const d = typeof date === 'string' ? new Date(date) : date;
+  const now = new Date();
+  const diffInSeconds = Math.floor((now.getTime() - d.getTime()) / 1000);
+  
+  const rtf = new Intl.RelativeTimeFormat(locale, { numeric: 'auto' });
+  
+  if (diffInSeconds < 60) {
+    return rtf.format(-diffInSeconds, 'second');
+  }
+  if (diffInSeconds < 3600) {
+    return rtf.format(-Math.floor(diffInSeconds / 60), 'minute');
+  }
+  if (diffInSeconds < 86400) {
+    return rtf.format(-Math.floor(diffInSeconds / 3600), 'hour');
+  }
+  return rtf.format(-Math.floor(diffInSeconds / 86400), 'day');
+}
+
+// Օգտագործում
+formatRelativeTime(fiveMinutesAgo, 'en');    // "5 minutes ago"
+formatRelativeTime(fiveMinutesAgo, 'ru');    // "5 минут назад"
+```
+
+---
+
+## 📝 PLURALIZATION
+
+### Հոգնակի թվի կանոններ
+
+```json
+// locales/en/products.json
+{
+  "itemCount": {
+    "zero": "No items",
+    "one": "1 item",
+    "other": "{count} items"
+  }
+}
+
+// locales/ru/products.json
+{
+  "itemCount": {
+    "zero": "Нет товаров",
+    "one": "{count} товар",
+    "few": "{count} товара",
+    "many": "{count} товаров",
+    "other": "{count} товаров"
+  }
+}
+```
+
+### Իրականացում
+
+```typescript
+// lib/i18n/pluralize.ts
+
+export function pluralize(
+  count: number,
+  forms: Record<string, string>,
+  locale: string,
+): string {
+  const pluralRules = new Intl.PluralRules(locale);
+  const form = pluralRules.select(count);
+  
+  const template = forms[form] || forms.other;
+  return template.replace('{count}', count.toString());
+}
+
+// Օգտագործում
+pluralize(0, dict.itemCount, 'en');   // "No items"
+pluralize(1, dict.itemCount, 'en');   // "1 item"
+pluralize(5, dict.itemCount, 'en');   // "5 items"
+
+pluralize(1, dict.itemCount, 'ru');   // "1 товар"
+pluralize(2, dict.itemCount, 'ru');   // "2 товара"
+pluralize(5, dict.itemCount, 'ru');   // "5 товаров"
+pluralize(21, dict.itemCount, 'ru');  // "21 товар"
+```
+
+---
+
+## 🔄 ԼԵԶՎԻ ՓՈԽԱՐԿՈՒՄ
+
+### Language Switcher
+
+```tsx
+// components/LanguageSwitcher.tsx
+'use client';
+
+import { usePathname, useRouter } from 'next/navigation';
+
+const LOCALES = [
+  { code: 'en', name: 'English', flag: '🇺🇸' },
+  { code: 'ru', name: 'Русский', flag: '🇷🇺' },
+  { code: 'hy', name: 'Հայերեն', flag: '🇦🇲' },
+];
+
+export function LanguageSwitcher({ currentLocale }: { currentLocale: string }) {
+  const router = useRouter();
+  const pathname = usePathname();
+
+  const switchLocale = (newLocale: string) => {
+    // Փոխարինում ենք ընթացիկ լոկալը path-ում
+    const newPath = pathname.replace(`/${currentLocale}`, `/${newLocale}`);
+    router.push(newPath);
+  };
+
+  return (
+    <select
+      value={currentLocale}
+      onChange={(e) => switchLocale(e.target.value)}
+      className="border rounded p-2"
+    >
+      {LOCALES.map((locale) => (
+        <option key={locale.code} value={locale.code}>
+          {locale.flag} {locale.name}
+        </option>
+      ))}
+    </select>
+  );
+}
+```
+
+---
+
+## 🚫 ԱՆՏԻՊԱՏԵՐՆԵՐ
+
+### ❌ Մի արա
+
+```tsx
+// ❌ Տեքստերի hardcode
+<button>Submit</button>
+<p>Your order has been placed</p>
+
+// ❌ Տողերի կոնկատենացիա (խախտում է բառերի կարգը)
+const message = `Hello, ` + userName + `! You have ` + count + ` items.`;
+
+// ❌ Ֆորմատների hardcode
+const date = `${d.getMonth()}/${d.getDate()}/${d.getFullYear()}`; // US ֆորմատ
+const price = `$${amount.toFixed(2)}`; // Դոլարները hardcoded
+
+// ❌ Թարգմանությունների պահում կոդում
+const translations = {
+  en: { hello: 'Hello' },
+  ru: { hello: 'Привет' },
+};
+```
+
+### ✅ Արա
+
+```tsx
+// ✅ Բոլոր տեքստերը թարգմանություններից
+<button>{t('buttons.submit')}</button>
+<p>{t('orders.success')}</p>
+
+// ✅ Ինտերպոլացիա
+// JSON-ում. "greeting": "Hello, {name}! You have {count} items."
+t('greeting', { name: userName, count: itemCount })
+
+// ✅ Intl API ֆորմատավորման համար
+formatDate(date, locale)
+formatCurrency(amount, currency, locale)
+
+// ✅ Թարգմանություններ առանձին JSON ֆայլերում
+// locales/en/common.json
+// locales/ru/common.json
+```
+
+---
+
+## 📋 ՍՏՈՒԳԱՑՈՒՑԱԿ
+
+### Նախագծի սկիզբ
+
+- [ ] Աջակցվող լեզուները որոշված են
+- [ ] Ընտրված է գրադարան (next-intl, react-intl և այլն)
+- [ ] Կարգավորված է թղթապանակների կառուցվածք թարգմանությունների համար
+- [ ] Կարգավորված է fallback default locale-ի վրա
+
+### Մշակում
+
+- [ ] Բոլոր տեքստերը թարգմանությունների ֆայլերում են
+- [ ] Կոմպոնենտներում տեքստերի hardcode չկա
+- [ ] Օգտագործվում է Intl API ֆորմատավորման համար
+- [ ] Pluralization ճիշտ է կարգավորված
+- [ ] Language switcher աշխատում է
+
+### Ռելիզից առաջ
+
+- [ ] Բոլոր տողերը թարգմանված են բոլոր լեզուներով
+- [ ] Թեստավորում բոլոր լեզուներով
+- [ ] Ամսաթվեր/թվեր/արժույթներ ցուցադրվում են ճիշտ
+- [ ] Մակետը չի ջարդվում երկար թարգմանություններից
+- [ ] SEO. hreflang թեգեր ավելացված են
+
+---
+
+**Տարբերակ.** 1.1
+**Ամսաթիվ.** 2026-02-12

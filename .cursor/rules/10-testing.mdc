@@ -1,0 +1,567 @@
+---
+description: Թեստավորման կանոններ։ Կիրառվում է թեստային ֆայլերին և թեստավորման ռազմավարությանը։
+globs: ["**/*.test.ts", "**/*.test.tsx", "**/*.spec.ts", "**/tests/**", "**/__tests__/**"]
+alwaysApply: false
+---
+
+# ԹԵՍՏԱՎՈՐՄԱՆ ԿԱՆՈՆՆԵՐ
+
+> Թեստերը փաստաթուղթ են և պաշտպանություն ռեգրեսիաներից։ Գրի՛ր թեստեր կարևորի համար։
+
+---
+
+## 🎯 ԹԵՍՏԱՎՈՐՄԱՆ ՌԱԶՄԱՎԱՐՈՒԹՅՈՒՆ
+
+### Թեստերի բուրգ
+
+```
+        /\
+       /  \      E2E (5-10%)
+      /----\     Քրիտիկ user flow-եր
+     /      \
+    /--------\   Integration (20-30%)
+   /          \  API, սերվիսներ, հուկեր
+  /------------\ 
+ /              \ Unit (60-70%)
+/________________\ Բիզնես-լոգիկա, ուտիլիտաներ
+```
+
+### Ինչը պարտադիր թեստավորել
+
+| Տիպ | Ծածկույթ | Առաջնայնություն |
+|-----|----------|------------------|
+| Բիզնես-լոգիկա (domain) | ≥ 80% | 🔴 Քրիտիկ |
+| API endpoints | 100% happy path | 🔴 Քրիտիկ |
+| Ուտիլիտաներ | ≥ 70% | 🟡 Կարևոր |
+| React հուկեր (կաստոմ) | ≥ 70% | 🟡 Կարևոր |
+| UI կոմպոնենտներ | Անհրաժեշտության դեպքում | 🟢 Ընտրովի |
+
+### Ինչը կարելի է Չթեստավորել
+
+- Պարզ UI կոմպոնենտներ (միայն տվյալներ են ռենդերում)
+- TypeScript տիպեր
+- Կոնֆիգուրացիոն ֆայլեր
+- Երրորդ կողմի գրադարաններ
+
+---
+
+## 🧪 UNIT ԹԵՍՏԵՐ
+
+### Թեստի կառուցվածք (AAA)
+
+```typescript
+// Arrange-Act-Assert
+
+describe('calculateOrderTotal', () => {
+  it('should calculate total with discount', () => {
+    // Arrange (Նախապատրաստում)
+    const items = [
+      { price: 1000, quantity: 2 },
+      { price: 500, quantity: 1 },
+    ];
+    const discount = 10; // 10%
+    
+    // Act (Գործողություն)
+    const total = calculateOrderTotal(items, discount);
+    
+    // Assert (Ստուգում)
+    expect(total).toBe(2250); // (2000 + 500) * 0.9
+  });
+  
+  it('should return 0 for empty items', () => {
+    expect(calculateOrderTotal([], 0)).toBe(0);
+  });
+  
+  it('should throw for negative discount', () => {
+    expect(() => calculateOrderTotal([], -10)).toThrow('Invalid discount');
+  });
+});
+```
+
+### Թեստերի անվանավորում
+
+```typescript
+// ✅ ԼԱՎ — նկարագրում է վարքագիծը
+it('should return user by id when user exists')
+it('should throw NotFoundError when user does not exist')
+it('should hash password with argon2')
+it('should send confirmation email after order creation')
+
+// ❌ ՎԱՏ — արդյունքը չի նկարագրում
+it('test getUser')
+it('getUser works')
+it('test 1')
+```
+
+### Թեստերի խմբավորում
+
+```typescript
+describe('OrderService', () => {
+  describe('create', () => {
+    it('should create order with valid data', () => { ... });
+    it('should reserve stock for each item', () => { ... });
+    it('should throw if insufficient stock', () => { ... });
+  });
+  
+  describe('cancel', () => {
+    it('should cancel pending order', () => { ... });
+    it('should throw if order already shipped', () => { ... });
+    it('should restore stock after cancellation', () => { ... });
+  });
+  
+  describe('calculateTotal', () => {
+    it('should sum all items', () => { ... });
+    it('should apply discount', () => { ... });
+    it('should add shipping cost', () => { ... });
+  });
+});
+```
+
+---
+
+## 🔗 INTEGRATION ԹԵՍՏԵՐ
+
+### API թեստեր — Next.js Route Handlers
+
+```typescript
+// __tests__/api/products.test.ts
+import { describe, it, expect, beforeEach } from 'vitest';
+import { GET, POST } from '@/app/api/products/route';
+import { NextRequest } from 'next/server';
+import { prisma } from '@/lib/prisma';
+
+describe('GET /api/products', () => {
+  beforeEach(async () => {
+    await prisma.product.deleteMany();
+  });
+
+  it('should return empty list', async () => {
+    const req = new NextRequest('http://localhost/api/products');
+    const res = await GET(req);
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data).toEqual([]);
+    expect(body.meta.total).toBe(0);
+  });
+
+  it('should return products with pagination', async () => {
+    await prisma.product.createMany({
+      data: [
+        { name: 'Product 1', price: 1000 },
+        { name: 'Product 2', price: 2000 },
+      ],
+    });
+
+    const req = new NextRequest('http://localhost/api/products?page=1&limit=1');
+    const res = await GET(req);
+    const body = await res.json();
+
+    expect(body.data).toHaveLength(1);
+    expect(body.meta.total).toBe(2);
+  });
+});
+
+describe('POST /api/products', () => {
+  it('should create product', async () => {
+    const req = new NextRequest('http://localhost/api/products', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'New Product', price: 5000, categoryId: 'cat-123' }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    const res = await POST(req);
+    const body = await res.json();
+
+    expect(res.status).toBe(201);
+    expect(body.data.name).toBe('New Product');
+  });
+
+  it('should return 422 for invalid data', async () => {
+    const req = new NextRequest('http://localhost/api/products', {
+      method: 'POST',
+      body: JSON.stringify({ name: '' }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    const res = await POST(req);
+    expect(res.status).toBe(422);
+  });
+});
+```
+
+### API թեստեր — NestJS (supertest)
+
+```typescript
+import { Test } from '@nestjs/testing';
+import { INestApplication } from '@nestjs/common';
+import * as request from 'supertest';
+import { AppModule } from '../src/app.module';
+import { PrismaService } from '../src/prisma/prisma.service';
+
+describe('ProductsController (e2e)', () => {
+  let app: INestApplication;
+  let prisma: PrismaService;
+  
+  beforeAll(async () => {
+    const moduleRef = await Test.createTestingModule({
+      imports: [AppModule],
+    }).compile();
+    
+    app = moduleRef.createNestApplication();
+    prisma = moduleRef.get(PrismaService);
+    await app.init();
+  });
+  
+  afterAll(async () => {
+    await app.close();
+  });
+  
+  beforeEach(async () => {
+    // Թեստային տվյալների մաքրում
+    await prisma.product.deleteMany();
+  });
+  
+  describe('GET /products', () => {
+    it('should return empty list', async () => {
+      const response = await request(app.getHttpServer())
+        .get('/api/v1/products')
+        .expect(200);
+      
+      expect(response.body.data).toEqual([]);
+      expect(response.body.meta.total).toBe(0);
+    });
+    
+    it('should return products with pagination', async () => {
+      // Arrange
+      await prisma.product.createMany({
+        data: [
+          { name: 'Product 1', price: 1000 },
+          { name: 'Product 2', price: 2000 },
+        ],
+      });
+      
+      // Act
+      const response = await request(app.getHttpServer())
+        .get('/api/v1/products?page=1&limit=1')
+        .expect(200);
+      
+      // Assert
+      expect(response.body.data).toHaveLength(1);
+      expect(response.body.meta.total).toBe(2);
+      expect(response.body.meta.totalPages).toBe(2);
+    });
+  });
+  
+  // Ստեղծում ենք թեստային JWT թոքեն
+  const adminToken = jwt.sign(
+    { userId: 'test-admin', role: 'admin' },
+    process.env.JWT_SECRET!,
+    { expiresIn: '1h' },
+  );
+
+  describe('POST /products', () => {
+    it('should create product', async () => {
+      const dto = {
+        name: 'New Product',
+        price: 5000,
+        categoryId: 'cat-123',
+      };
+      
+      const response = await request(app.getHttpServer())
+        .post('/api/v1/products')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send(dto)
+        .expect(201);
+      
+      expect(response.body.data.name).toBe('New Product');
+      expect(response.body.data.id).toBeDefined();
+    });
+    
+    it('should return 400 for invalid data', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/api/v1/products')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ name: '' }) // Invalid
+        .expect(400);
+      
+      expect(response.body.errors).toBeDefined();
+    });
+    
+    it('should return 401 without auth', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/products')
+        .send({ name: 'Test' })
+        .expect(401);
+    });
+  });
+});
+```
+
+### React հուկերի թեստավորում
+
+```typescript
+import { renderHook, act, waitFor } from '@testing-library/react';
+import { useProducts } from './useProducts';
+
+// Mock API
+vi.mock('@/lib/api', () => ({
+  fetchProducts: vi.fn(),
+}));
+
+describe('useProducts', () => {
+  it('should fetch products on mount', async () => {
+    const mockProducts = [{ id: '1', name: 'Product 1' }];
+    (fetchProducts as ReturnType<typeof vi.fn>).mockResolvedValue(mockProducts);
+    
+    const { result } = renderHook(() => useProducts());
+    
+    // Սկզբնական վիճակ
+    expect(result.current.isLoading).toBe(true);
+    expect(result.current.data).toBeUndefined();
+    
+    // Բեռնումից հետո
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+    
+    expect(result.current.data).toEqual(mockProducts);
+  });
+  
+  it('should handle error', async () => {
+    const error = new Error('Failed to fetch');
+    (fetchProducts as ReturnType<typeof vi.fn>).mockRejectedValue(error);
+    
+    const { result } = renderHook(() => useProducts());
+    
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+    
+    expect(result.current.error).toBe(error);
+  });
+  
+  it('should refetch when filters change', async () => {
+    const { result, rerender } = renderHook(
+      ({ filters }) => useProducts(filters),
+      { initialProps: { filters: { category: 'a' } } }
+    );
+    
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+    
+    // Փոխում ենք ֆիլտրերը
+    rerender({ filters: { category: 'b' } });
+    
+    expect(fetchProducts).toHaveBeenCalledWith({ category: 'b' });
+  });
+});
+```
+
+---
+
+## 🌐 E2E ԹԵՍՏԵՐ
+
+### Playwright
+
+```typescript
+// tests/e2e/checkout.spec.ts
+import { test, expect } from '@playwright/test';
+
+test.describe('Checkout Flow', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/');
+  });
+  
+  test('should complete checkout as guest', async ({ page }) => {
+    // Ավելացնել ապրանք զամբյուղ
+    await page.goto('/products/iphone-15');
+    await page.click('button:has-text("Զամբյուղ")');
+    
+    // Անցնել զամբյուղ
+    await page.click('[data-testid="cart-icon"]');
+    await expect(page.locator('.cart-item')).toHaveCount(1);
+    
+    // Անցնել պատվերի ձևակերպման
+    await page.click('button:has-text("Ձևակերպել պատվեր")');
+    
+    // Լրացնել ձև
+    await page.fill('[name="email"]', 'test@example.com');
+    await page.fill('[name="phone"]', '+37498123456');
+    await page.fill('[name="address"]', 'Test Address 123');
+    
+    // Ընտրել վճարման եղանակ
+    await page.click('[data-testid="payment-card"]');
+    
+    // Հաստատել պատվեր
+    await page.click('button:has-text("Վճարել")');
+    
+    // Ստուգել հաջողությունը
+    await expect(page).toHaveURL(/\/orders\/ORD-/);
+    await expect(page.locator('h1')).toContainText('Պատվերը ձևակերպված է');
+  });
+  
+  test('should show error for invalid email', async ({ page }) => {
+    await page.goto('/checkout');
+    await page.fill('[name="email"]', 'invalid-email');
+    await page.click('button:has-text("Շարունակել")');
+    
+    await expect(page.locator('.error-message')).toContainText('Invalid email');
+  });
+});
+```
+
+---
+
+## 🎭 ՄՈԿԵՐ ԵՎ ՍՏԱԲԵՐ
+
+### Ֆունկցիաների mock
+
+```typescript
+// ✅ Vitest mock (vi.fn — jest.fn-ի անալոգ)
+const mockFn = vi.fn();
+mockFn.mockReturnValue(42);
+mockFn.mockResolvedValue({ data: [] });
+mockFn.mockRejectedValue(new Error('Failed'));
+
+// Ստուգումներ
+expect(mockFn).toHaveBeenCalled();
+expect(mockFn).toHaveBeenCalledWith('arg1', 'arg2');
+expect(mockFn).toHaveBeenCalledTimes(3);
+```
+
+### Մոդուլների mock
+
+```typescript
+// __mocks__/prisma.ts
+export const prisma = {
+  user: {
+    findUnique: vi.fn(),
+    findMany: vi.fn(),
+    create: vi.fn(),
+    update: vi.fn(),
+    delete: vi.fn(),
+  },
+  $transaction: vi.fn((fn) => fn(prisma)),
+};
+
+// Թեստում
+vi.mock('@/lib/prisma', () => import('./__mocks__/prisma'));
+
+it('should find user by id', async () => {
+  const mockUser = { id: '1', name: 'John' };
+  (prisma.user.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue(mockUser);
+  
+  const result = await userService.findById('1');
+  
+  expect(result).toEqual(mockUser);
+  expect(prisma.user.findUnique).toHaveBeenCalledWith({
+    where: { id: '1' },
+  });
+});
+```
+
+### Թեստային տվյալների ֆաբրիկաներ
+
+```typescript
+// tests/factories/user.factory.ts
+import { faker } from '@faker-js/faker';
+
+export function createUser(overrides: Partial<User> = {}): User {
+  return {
+    id: faker.string.uuid(),
+    email: faker.internet.email(),
+    name: faker.person.fullName(),
+    role: 'USER',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...overrides,
+  };
+}
+
+export function createProduct(overrides: Partial<Product> = {}): Product {
+  return {
+    id: faker.string.uuid(),
+    name: faker.commerce.productName(),
+    price: faker.number.int({ min: 100, max: 100000 }),
+    stock: faker.number.int({ min: 0, max: 100 }),
+    isActive: true,
+    ...overrides,
+  };
+}
+
+// Օգտագործում
+const user = createUser({ role: 'ADMIN' });
+const product = createProduct({ stock: 0 });
+```
+
+---
+
+## 📋 ԹԵՍՏԵՐԻ ԿԱՌՈՒՑՎԱԾՔ
+
+### Ֆայլերի տեղաբաշխում
+
+```
+src/
+├── modules/
+│   └── products/
+│       ├── products.service.ts
+│       ├── products.service.spec.ts      # Unit թեստ կողքին
+│       ├── products.controller.ts
+│       └── products.controller.spec.ts
+│
+├── lib/
+│   └── utils/
+│       ├── format.ts
+│       └── format.test.ts                # Unit թեստ կողքին
+│
+tests/
+├── integration/                          # Integration թեստեր
+│   ├── api/
+│   │   └── products.test.ts
+│   └── services/
+│       └── order-flow.test.ts
+│
+├── e2e/                                  # E2E թեստեր
+│   ├── checkout.spec.ts
+│   └── auth.spec.ts
+│
+├── fixtures/                             # Թեստային տվյալներ
+│   ├── products.json
+│   └── users.json
+│
+├── factories/                            # Ֆաբրիկաներ
+│   ├── user.factory.ts
+│   └── product.factory.ts
+│
+└── setup/                                # Կարգավորում
+    ├── jest.setup.ts
+    └── test-utils.tsx
+```
+
+---
+
+## 📋 ՍՏՈՒԳԱՑՈՒՑԱԿ
+
+### Merge-ից առաջ
+
+- [ ] Բոլոր թեստերը անցնում են
+- [ ] Նոր բիզնես-լոգիկան ծածկված է թեստերով
+- [ ] API endpoints-ը թեստավորված են
+- [ ] Edge cases-ը մշակված են
+- [ ] console.log թեստերում չկա
+- [ ] Թեստերը մեկուսացված են (միմյանցից կախված չեն)
+
+### Թեստերի որակ
+
+- [ ] Թեստը ստուգում է մեկ վարքագիծ
+- [ ] Թեստի անունը նկարագրում է ակնկալվող վարքագիծը
+- [ ] Օգտագործվում է AAA պատերն
+- [ ] Մոկերը ճիշտ կարգավորված են
+- [ ] Flaky թեստեր չկան
+
+---
+
+**Տարբերակ.** 1.1
+**Ամսաթիվ.** 2026-02-12

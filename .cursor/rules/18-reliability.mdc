@@ -1,0 +1,590 @@
+---
+description: Հուսալիության կանոններ։ Timeouts, retries, graceful shutdown, fault tolerance։
+globs: ["**/*.ts", "**/api/**", "**/server/**"]
+alwaysApply: false
+---
+
+# ՀՈՒՍԱԼԻՈՒԹՅԱՆ ԿԱՆՈՆՆԵՐ
+
+> Ամեն ինչ կոտրվում է։ Հարցը նրանում է, թե ինչպես է համակարգը արձագանքում։
+
+---
+
+## 🎯 ՀԻՄՆԱԿԱՆ ՍԿԶԲՈՒՆՔՆԵՐ
+
+1. **Fail Fast** — անվերջ մի սպասի, դիր timeout-եր
+2. **Graceful Degradation** — աշխատի՛ր նույնիսկ մասնակի խափանումների դեպքում
+3. **Retry with Backoff** — կրկնի՛ր խելացի, DDoS մի արա
+4. **Circuit Breaker** — պաշտպանի՛ր կասկադային խափանումներից
+
+---
+
+## ⏱️ TIMEOUTS
+
+### Timeout-ների կանոններ
+
+```typescript
+// ✅ ՄԻՇՏ դիր timeout-եր արտաքին կանչերի վրա
+
+// HTTP հարցումներ
+const controller = new AbortController();
+const timeout = setTimeout(() => controller.abort(), 5000);
+
+try {
+  const response = await fetch(url, {
+    signal: controller.signal,
+  });
+} finally {
+  clearTimeout(timeout);
+}
+
+// Կամ գրադարանով
+import ky from 'ky';
+
+const api = ky.create({
+  timeout: 10000, // 10 վայրկյան
+  retry: {
+    limit: 2,
+    methods: ['get'],
+    statusCodes: [408, 502, 503, 504],
+  },
+});
+```
+
+### Խորհուրդ տրվող timeout-եր
+
+| Գործողություն | Timeout | Նշում |
+|----------|---------|------------|
+| API call (ներքին) | 5-10s | Սեփական սերվիսների միջև |
+| API call (արտաքին) | 10-30s | Երրորդ կողմի սերվիսներ |
+| Database query | 5-30s | Կախված բարդությունից |
+| File upload | 60-300s | Կախված չափից |
+| Payment processing | 30-60s | Կրիտիկ, retry-ով |
+
+### Timeout-եր Prisma-ում
+
+```typescript
+// prisma/schema.prisma
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Connection string-ում
+// ?connection_limit=10&connect_timeout=10&pool_timeout=10
+
+// Կամ կոդում
+const prisma = new PrismaClient({
+  datasources: {
+    db: {
+      url: process.env.DATABASE_URL,
+    },
+  },
+});
+
+// Transaction timeout
+await prisma.$transaction(
+  async (tx) => {
+    // operations
+  },
+  {
+    maxWait: 5000,  // Սպասել transaction-ին
+    timeout: 10000, // Ինքը transaction-ի timeout
+  }
+);
+```
+
+---
+
+## 🔄 RETRY STRATEGIES
+
+### Exponential Backoff
+
+```typescript
+// lib/utils/retry.ts
+
+interface RetryConfig {
+  maxRetries: number;
+  baseDelay: number;    // ms
+  maxDelay: number;     // ms
+  backoffFactor: number;
+  jitter: boolean;
+  retryCondition?: (error: Error) => boolean;
+}
+
+const DEFAULT_CONFIG: RetryConfig = {
+  maxRetries: 3,
+  baseDelay: 1000,
+  maxDelay: 30000,
+  backoffFactor: 2,
+  jitter: true,
+};
+
+export async function withRetry<T>(
+  fn: () => Promise<T>,
+  config: Partial<RetryConfig> = {}
+): Promise<T> {
+  const {
+    maxRetries,
+    baseDelay,
+    maxDelay,
+    backoffFactor,
+    jitter,
+    retryCondition,
+  } = { ...DEFAULT_CONFIG, ...config };
+
+  let lastError: Error;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error as Error;
+
+      // Ստուգում՝ retry անելու need կա՞
+      if (retryCondition && !retryCondition(lastError)) {
+        throw lastError;
+      }
+
+      // Վերջին փորձ — նետում ենք սխալը
+      if (attempt === maxRetries) {
+        throw lastError;
+      }
+
+      // Հաշվում ենք delay
+      let delay = Math.min(
+        baseDelay * Math.pow(backoffFactor, attempt),
+        maxDelay
+      );
+
+      // Ավելացնում ենք jitter (±10%)
+      if (jitter) {
+        const jitterAmount = delay * 0.1;
+        delay += Math.random() * jitterAmount * 2 - jitterAmount;
+      }
+
+      console.log(
+        `Retry attempt ${attempt + 1}/${maxRetries} after ${delay}ms`
+      );
+
+      await sleep(delay);
+    }
+  }
+
+  throw lastError!;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+```
+
+### Օգտագործում
+
+```typescript
+// Պարզ retry
+const data = await withRetry(() => fetchData(url));
+
+// Custom կոնֆիգով
+const data = await withRetry(
+  () => processPayment(orderId),
+  {
+    maxRetries: 5,
+    baseDelay: 2000,
+    retryCondition: (error) => {
+      // Retry միայն որոշակի սխալների համար
+      if (error instanceof ApiError) {
+        return error.statusCode >= 500 || error.statusCode === 429;
+      }
+      return true;
+    },
+  }
+);
+```
+
+### Երբ retry Չանել
+
+```typescript
+// ❌ Retry Չանել.
+// - 4xx սխալներ (բացի 429, 408)
+// - Validation errors
+// - Auth errors (401, 403)
+// - Business logic errors
+
+const retryableStatuses = new Set([408, 429, 500, 502, 503, 504]);
+
+const shouldRetry = (error: ApiError): boolean => {
+  return retryableStatuses.has(error.statusCode);
+};
+```
+
+---
+
+## 🔌 CIRCUIT BREAKER
+
+### Circuit Breaker պաթեռն
+
+```typescript
+// lib/utils/circuit-breaker.ts
+
+enum CircuitState {
+  CLOSED = 'CLOSED',   // Նորմալ աշխատանք
+  OPEN = 'OPEN',       // Կանչերը արգելափակում ենք
+  HALF_OPEN = 'HALF_OPEN', // Փորձում ենք վերականգնվել
+}
+
+interface CircuitBreakerConfig {
+  failureThreshold: number;  // Քանի սխալ մինչև բացելը
+  successThreshold: number;  // Քանի հաջողություն փակելու համար
+  timeout: number;           // OPEN վիճակում ժամանակ (ms)
+}
+
+export class CircuitBreaker {
+  private state: CircuitState = CircuitState.CLOSED;
+  private failures: number = 0;
+  private successes: number = 0;
+  private lastFailureTime?: number;
+
+  constructor(
+    private readonly name: string,
+    private readonly config: CircuitBreakerConfig = {
+      failureThreshold: 5,
+      successThreshold: 2,
+      timeout: 30000,
+    }
+  ) {}
+
+  async execute<T>(fn: () => Promise<T>): Promise<T> {
+    // Ստուգում ենք վիճակը
+    if (this.state === CircuitState.OPEN) {
+      if (this.shouldAttemptReset()) {
+        this.state = CircuitState.HALF_OPEN;
+      } else {
+        throw new CircuitOpenError(this.name);
+      }
+    }
+
+    try {
+      const result = await fn();
+      this.onSuccess();
+      return result;
+    } catch (error) {
+      this.onFailure();
+      throw error;
+    }
+  }
+
+  private onSuccess(): void {
+    this.failures = 0;
+
+    if (this.state === CircuitState.HALF_OPEN) {
+      this.successes++;
+      if (this.successes >= this.config.successThreshold) {
+        this.state = CircuitState.CLOSED;
+        this.successes = 0;
+        console.log(`Circuit ${this.name} CLOSED`);
+      }
+    }
+  }
+
+  private onFailure(): void {
+    this.failures++;
+    this.lastFailureTime = Date.now();
+
+    if (this.state === CircuitState.HALF_OPEN) {
+      this.state = CircuitState.OPEN;
+      this.successes = 0;
+      console.log(`Circuit ${this.name} OPEN (from HALF_OPEN)`);
+    } else if (this.failures >= this.config.failureThreshold) {
+      this.state = CircuitState.OPEN;
+      console.log(`Circuit ${this.name} OPEN`);
+    }
+  }
+
+  private shouldAttemptReset(): boolean {
+    return (
+      this.lastFailureTime !== undefined &&
+      Date.now() - this.lastFailureTime >= this.config.timeout
+    );
+  }
+
+  getState(): CircuitState {
+    return this.state;
+  }
+}
+
+class CircuitOpenError extends Error {
+  constructor(circuitName: string) {
+    super(`Circuit breaker "${circuitName}" is OPEN`);
+    this.name = 'CircuitOpenError';
+  }
+}
+```
+
+### Օգտագործում
+
+```typescript
+// Circuit breaker յուրաքանչյուր արտաքին սերվիսի համար
+const paymentCircuit = new CircuitBreaker('payment-service', {
+  failureThreshold: 3,
+  successThreshold: 2,
+  timeout: 60000,
+});
+
+async function processPayment(orderId: string) {
+  return paymentCircuit.execute(async () => {
+    return await paymentApi.charge(orderId);
+  });
+}
+
+// Բաց circuit-ի դեպքում — graceful degradation
+try {
+  await processPayment(orderId);
+} catch (error) {
+  if (error instanceof CircuitOpenError) {
+    // Այլընտրանքային ճանապարհ
+    await queuePaymentForLater(orderId);
+    return { status: 'queued' };
+  }
+  throw error;
+}
+```
+
+---
+
+## 🛑 GRACEFUL SHUTDOWN
+
+### Next.js — cleanup и health checks
+
+```typescript
+// Next.js Vercel-ում = serverless. Graceful shutdown պետք չէ —
+// յուրաքանչյուր հարցում մշակվում է մեկուսացված։
+
+// Prisma-ի համար Next.js-ում — singleton պաթեռն cleanup-ով
+// lib/prisma.ts
+import { PrismaClient } from '@prisma/client';
+
+const globalForPrisma = globalThis as unknown as { prisma: PrismaClient };
+
+export const prisma = globalForPrisma.prisma ?? new PrismaClient();
+
+if (process.env.NODE_ENV !== 'production') {
+  globalForPrisma.prisma = prisma;
+}
+
+// Next.js health check (անհրաժեշտ է external monitoring-ի համար)
+// app/api/health/route.ts
+import { NextResponse } from 'next/server';
+import { prisma } from '@/lib/prisma';
+
+export async function GET() {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    return NextResponse.json({ status: 'ok', db: 'connected' });
+  } catch {
+    return NextResponse.json({ status: 'error', db: 'disconnected' }, { status: 503 });
+  }
+}
+```
+
+### NestJS — Graceful Shutdown
+
+```typescript
+// main.ts
+import { NestFactory } from '@nestjs/core';
+import { AppModule } from './app.module';
+import { Logger } from '@nestjs/common';
+
+const SHUTDOWN_TIMEOUT_MS = 30_000;
+
+async function bootstrap() {
+  const logger = new Logger('Bootstrap');
+  const app = await NestFactory.create(AppModule);
+  const port = process.env.PORT || 3000;
+
+  // Միացնում ենք shutdown hooks
+  app.enableShutdownHooks();
+
+  // Graceful shutdown մշակիչ
+  const shutdown = async (signal: string) => {
+    logger.log(`Received ${signal}. Starting graceful shutdown...`);
+
+    const shutdownTimeout = setTimeout(() => {
+      logger.error('Shutdown timeout exceeded, forcing exit');
+      process.exit(1);
+    }, SHUTDOWN_TIMEOUT_MS);
+
+    try {
+      await app.close();
+      logger.log('Application closed successfully');
+      clearTimeout(shutdownTimeout);
+      process.exit(0);
+    } catch (error) {
+      logger.error('Error during shutdown', error);
+      clearTimeout(shutdownTimeout);
+      process.exit(1);
+    }
+  };
+
+  // Լսում ենք signal-ները
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+
+  await app.listen(port);
+  logger.log(`Application started on port ${port}`);
+}
+
+bootstrap();
+```
+
+### NestJS — OnModuleDestroy cleanup-ի համար
+
+```typescript
+// services/database.service.ts
+import { Injectable, OnModuleDestroy, Logger } from '@nestjs/common';
+import { PrismaClient } from '@prisma/client';
+
+@Injectable()
+export class PrismaService extends PrismaClient implements OnModuleDestroy {
+  private readonly logger = new Logger(PrismaService.name);
+
+  async onModuleDestroy() {
+    this.logger.log('Disconnecting from database...');
+    await this.$disconnect();
+    this.logger.log('Database disconnected');
+  }
+}
+
+// services/redis.service.ts
+@Injectable()
+export class RedisService implements OnModuleDestroy {
+  private readonly logger = new Logger(RedisService.name);
+
+  async onModuleDestroy() {
+    this.logger.log('Closing Redis connection...');
+    await this.redis.quit();
+    this.logger.log('Redis disconnected');
+  }
+}
+```
+
+### NestJS — Health Checks (Kubernetes Readiness/Liveness)
+
+```typescript
+// health/health.controller.ts
+@Controller('health')
+export class HealthController {
+  constructor(private readonly health: HealthCheckService) {}
+
+  // Liveness — հավելվածը կենդանի՞
+  @Get('live')
+  @HealthCheck()
+  liveness() {
+    return { status: 'ok' };
+  }
+
+  // Readiness — պատրաստ է traffic ընդունելու՞
+  @Get('ready')
+  @HealthCheck()
+  readiness() {
+    return this.health.check([
+      // Ստուգում ենք ԲԴ-ը
+      () => this.db.pingCheck('database'),
+      // Ստուգում ենք Redis-ը
+      () => this.redis.pingCheck('redis'),
+    ]);
+  }
+}
+```
+
+---
+
+## 🔥 FAULT TOLERANCE PATTERNS
+
+### Fallback
+
+```typescript
+// Սխալի դեպքում — օգտագործում ենք fallback
+async function getProductRecommendations(userId: string): Promise<Product[]> {
+  try {
+    return await recommendationService.getPersonalized(userId);
+  } catch (error) {
+    logger.warn('Recommendation service failed, using fallback', { userId });
+    // Fallback — հայտնի ապրանքներ
+    return await productService.getPopular();
+  }
+}
+```
+
+### Bulkhead (մեկուսացում)
+
+```typescript
+// Մեկուսացնում ենք կրիտիկական գործողությունները
+import PQueue from 'p-queue';
+
+// Առանձին հերթեր տարբեր տիպի գործողությունների համար
+const paymentQueue = new PQueue({ concurrency: 10 });
+const emailQueue = new PQueue({ concurrency: 5 });
+const analyticsQueue = new PQueue({ concurrency: 20 });
+
+// Կրիտիկական գործողությունները չեն արգելափակվում ոչ-կրիտիկականներով
+await paymentQueue.add(() => processPayment(order));
+emailQueue.add(() => sendConfirmationEmail(order));  // Սպասում չենք
+analyticsQueue.add(() => trackPurchase(order));      // Սպասում չենք
+```
+
+### Rate Limiting (Client Side)
+
+```typescript
+import Bottleneck from 'bottleneck';
+
+// Սահմանափակում ենք հարցումները արտաքին API-ին
+const limiter = new Bottleneck({
+  maxConcurrent: 5,      // Առավելագույնը 5 միաժամանակ
+  minTime: 100,          // Նվազագույն 100ms հարցումների միջև
+  reservoir: 100,        // 100 հարցում
+  reservoirRefreshAmount: 100,
+  reservoirRefreshInterval: 60 * 1000, // Թարմացնել ամեն րոպե
+});
+
+const response = await limiter.schedule(() => 
+  externalApi.call(data)
+);
+```
+
+---
+
+## 📋 CHECKLIST
+
+### Timeout-եր
+
+- [ ] Բոլոր արտաքին կանչերն ունեն timeout
+- [ ] Database query-ներ timeout-ով
+- [ ] HTTP request-ներ timeout-ով
+- [ ] Timeout-երը համապատասխանում են գործողություններին
+
+### Retry-ներ
+
+- [ ] Exponential backoff retry-ների համար
+- [ ] Jitter thundering herd-ը կանխելու համար
+- [ ] Retry միայն recoverable սխալների համար
+- [ ] Սահման retry-ների քանակի վրա
+
+### Graceful Shutdown
+
+- [ ] SIGTERM/SIGINT-ի մշակում
+- [ ] Database connection-ների փակում
+- [ ] Ակտիվ request-ների ավարտում
+- [ ] Timeout shutdown-ի վրա
+
+### Fault Tolerance
+
+- [ ] Circuit breaker-ներ արտաքին սերվիսների համար
+- [ ] Fallback-ներ non-critical ֆիչերի համար
+- [ ] Health check-եր (liveness/readiness)
+- [ ] Rate limiting պաշտպանության համար
+
+---
+
+**Տարբերակ.** 1.1
+**Ամսաթիվ.** 2026-02-12

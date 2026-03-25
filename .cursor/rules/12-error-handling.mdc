@@ -1,0 +1,831 @@
+---
+description: Սխալների մշակման կանոններ։ Կենտրոնացված և համահունչ մշակում բոլոր մակարդակներում։
+globs: ["**/*.ts", "**/*.tsx"]
+alwaysApply: false
+---
+
+# ՍԽԱԼՆԵՐԻ ՄՇԱԿՄԱՆ ԿԱՆՈՆՆԵՐ
+
+> Սխալները բացառություն չեն, այլ նորմալ հոսքի մաս։ Մշակի՛ր դրանք ճիշտ։
+
+---
+
+## 🎯 ՀԻՄՆԱԿԱՆ ՍԿԶԲՈՒՆՔՆԵՐ
+
+1. **Կենտրոնացում** — սխալների մշակման միասնական մեխանիզմ
+2. **Տիպացում** — կաստոմ սխալների դասեր
+3. **Տեղեկատվականություն** — հասկանալի հաղորդագրություններ կոնտեքստով
+4. **Graceful Degradation** — հավելվածը աշխատում է նույնիսկ սխալների դեպքում
+
+---
+
+## 🏗️ ՍԽԱԼՆԵՐԻ ՃԱՐՏԱՐԱՊԵՏՈՒԹՅՈՒՆ
+
+### Սխալների դասերի հիերարխիա
+
+```typescript
+// lib/errors/base.error.ts
+
+/**
+ * Հիմնական դաս հավելվածի բոլոր սխալների համար
+ */
+export abstract class AppError extends Error {
+  abstract readonly statusCode: number;
+  abstract readonly code: string;
+  readonly isOperational: boolean = true;
+  readonly timestamp: Date = new Date();
+  
+  constructor(
+    message: string,
+    public readonly context?: Record<string, unknown>,
+  ) {
+    super(message);
+    this.name = this.constructor.name;
+    Error.captureStackTrace(this, this.constructor);
+  }
+
+  toJSON() {
+    return {
+      name: this.name,
+      code: this.code,
+      message: this.message,
+      statusCode: this.statusCode,
+      timestamp: this.timestamp.toISOString(),
+      ...(this.context && { context: this.context }),
+    };
+  }
+}
+```
+
+### Սխալների տիպեր
+
+```typescript
+// lib/errors/http.errors.ts
+
+// 400 Bad Request — անվավեր տվյալներ
+export class ValidationError extends AppError {
+  readonly statusCode = 400;
+  readonly code = 'VALIDATION_ERROR';
+  
+  constructor(
+    message: string,
+    public readonly errors: FieldError[] = [],
+  ) {
+    super(message, { errors });
+  }
+}
+
+interface FieldError {
+  field: string;
+  code: string;
+  message: string;
+  value?: unknown;
+}
+
+// 401 Unauthorized — չի աութենտիֆիկացվել
+export class UnauthorizedError extends AppError {
+  readonly statusCode = 401;
+  readonly code = 'UNAUTHORIZED';
+  
+  constructor(message = 'Authentication required') {
+    super(message);
+  }
+}
+
+// 403 Forbidden — իրավունքներ չկան
+export class ForbiddenError extends AppError {
+  readonly statusCode = 403;
+  readonly code = 'FORBIDDEN';
+  
+  constructor(message = 'Access denied') {
+    super(message);
+  }
+}
+
+// 404 Not Found — ռեսուրսը չի գտնվել
+export class NotFoundError extends AppError {
+  readonly statusCode = 404;
+  readonly code = 'NOT_FOUND';
+  
+  constructor(
+    resource: string,
+    identifier?: string | number,
+  ) {
+    const message = identifier
+      ? `${resource} with id '${identifier}' not found`
+      : `${resource} not found`;
+    super(message, { resource, identifier });
+  }
+}
+
+// 409 Conflict — կոնֆլիկտ (դուպլիկատ)
+export class ConflictError extends AppError {
+  readonly statusCode = 409;
+  readonly code = 'CONFLICT';
+  
+  constructor(message: string) {
+    super(message);
+  }
+}
+
+// 422 Unprocessable Entity — բիզնես-լոգիկա
+export class BusinessError extends AppError {
+  readonly statusCode = 422;
+  
+  constructor(
+    message: string,
+    public readonly code: string,
+    context?: Record<string, unknown>,
+  ) {
+    super(message, context);
+  }
+}
+
+// 429 Too Many Requests — rate limit
+export class RateLimitError extends AppError {
+  readonly statusCode = 429;
+  readonly code = 'RATE_LIMITED';
+  
+  constructor(
+    public readonly retryAfter?: number,
+  ) {
+    super('Too many requests', { retryAfter });
+  }
+}
+
+// 500 Internal Server Error — անսպասելի սխալ
+export class InternalError extends AppError {
+  readonly statusCode = 500;
+  readonly code = 'INTERNAL_ERROR';
+  readonly isOperational = false;
+  
+  constructor(message = 'Internal server error') {
+    super(message);
+  }
+}
+
+// 503 Service Unavailable — սերվիսը անհասանելի է
+export class ServiceUnavailableError extends AppError {
+  readonly statusCode = 503;
+  readonly code = 'SERVICE_UNAVAILABLE';
+  
+  constructor(service: string) {
+    super(`${service} is temporarily unavailable`, { service });
+  }
+}
+```
+
+### Դոմենային սխալներ
+
+```typescript
+// features/orders/errors.ts
+
+export class InsufficientStockError extends BusinessError {
+  constructor(
+    productId: string,
+    requested: number,
+    available: number,
+  ) {
+    super(
+      `Insufficient stock for product ${productId}`,
+      'INSUFFICIENT_STOCK',
+      { productId, requested, available },
+    );
+  }
+}
+
+export class OrderAlreadyPaidError extends BusinessError {
+  constructor(orderId: string) {
+    super(
+      `Order ${orderId} is already paid`,
+      'ORDER_ALREADY_PAID',
+      { orderId },
+    );
+  }
+}
+
+export class InvalidOrderStatusError extends BusinessError {
+  constructor(
+    orderId: string,
+    currentStatus: string,
+    expectedStatuses: string[],
+  ) {
+    super(
+      `Order ${orderId} has status '${currentStatus}', expected one of: ${expectedStatuses.join(', ')}`,
+      'INVALID_ORDER_STATUS',
+      { orderId, currentStatus, expectedStatuses },
+    );
+  }
+}
+```
+
+---
+
+## 🔧 BACKEND. ՍԽԱԼՆԵՐԻ ՄՇԱԿՈՒՄ
+
+### NestJS Global Exception Filter
+
+```typescript
+// common/filters/all-exceptions.filter.ts
+import {
+  ExceptionFilter,
+  Catch,
+  ArgumentsHost,
+  HttpException,
+  HttpStatus,
+  Logger,
+} from '@nestjs/common';
+import { Request, Response } from 'express';
+import { Prisma } from '@prisma/client';
+import { AppError } from '../errors/base.error';
+
+@Catch()
+export class AllExceptionsFilter implements ExceptionFilter {
+  private readonly logger = new Logger('ExceptionFilter');
+
+  catch(exception: unknown, host: ArgumentsHost) {
+    const ctx = host.switchToHttp();
+    const response = ctx.getResponse<Response>();
+    const request = ctx.getRequest<Request>();
+
+    const errorResponse = this.buildErrorResponse(exception, request);
+    
+    this.logError(exception, request, errorResponse);
+    
+    response.status(errorResponse.statusCode).json(errorResponse);
+  }
+
+  private buildErrorResponse(exception: unknown, request: Request) {
+    const requestId = request.headers['x-request-id'] as string;
+    const timestamp = new Date().toISOString();
+    const path = request.url;
+    const method = request.method;
+
+    // Մեր custom սխալը
+    if (exception instanceof AppError) {
+      return {
+        statusCode: exception.statusCode,
+        code: exception.code,
+        message: exception.message,
+        ...(exception.context && { details: exception.context }),
+        timestamp,
+        path,
+        requestId,
+      };
+    }
+
+    // NestJS HttpException
+    if (exception instanceof HttpException) {
+      const status = exception.getStatus();
+      const exceptionResponse = exception.getResponse();
+      
+      return {
+        statusCode: status,
+        code: this.getCodeFromStatus(status),
+        message: typeof exceptionResponse === 'string'
+          ? exceptionResponse
+          : (exceptionResponse as any).message,
+        ...(typeof exceptionResponse === 'object' && {
+          details: (exceptionResponse as any).errors,
+        }),
+        timestamp,
+        path,
+        requestId,
+      };
+    }
+
+    // Prisma սխալներ
+    if (exception instanceof Prisma.PrismaClientKnownRequestError) {
+      const prismaError = this.handlePrismaError(exception);
+      return {
+        ...prismaError,
+        timestamp,
+        path,
+        requestId,
+      };
+    }
+
+    // Անհայտ սխալ
+    return {
+      statusCode: HttpStatus.INTERNAL_SERVER_ERROR,
+      code: 'INTERNAL_ERROR',
+      message: 'An unexpected error occurred',
+      timestamp,
+      path,
+      requestId,
+    };
+  }
+
+  private handlePrismaError(error: Prisma.PrismaClientKnownRequestError) {
+    switch (error.code) {
+      case 'P2002': // Unique constraint
+        return {
+          statusCode: 409,
+          code: 'CONFLICT',
+          message: 'Resource already exists',
+          details: { fields: error.meta?.target },
+        };
+      case 'P2025': // Record not found
+        return {
+          statusCode: 404,
+          code: 'NOT_FOUND',
+          message: 'Resource not found',
+        };
+      case 'P2003': // Foreign key constraint
+        return {
+          statusCode: 400,
+          code: 'INVALID_REFERENCE',
+          message: 'Referenced resource does not exist',
+        };
+      default:
+        return {
+          statusCode: 500,
+          code: 'DATABASE_ERROR',
+          message: 'Database operation failed',
+        };
+    }
+  }
+
+  private getCodeFromStatus(status: number): string {
+    const codes: Record<number, string> = {
+      400: 'BAD_REQUEST',
+      401: 'UNAUTHORIZED',
+      403: 'FORBIDDEN',
+      404: 'NOT_FOUND',
+      409: 'CONFLICT',
+      422: 'UNPROCESSABLE_ENTITY',
+      429: 'RATE_LIMITED',
+      500: 'INTERNAL_ERROR',
+    };
+    return codes[status] || 'ERROR';
+  }
+
+  private logError(
+    exception: unknown,
+    request: Request,
+    errorResponse: any,
+  ) {
+    const { statusCode, code, message } = errorResponse;
+    const { method, url, body, headers } = request;
+    
+    const logContext = {
+      statusCode,
+      code,
+      method,
+      url,
+      requestId: headers['x-request-id'],
+      userId: (request as any).user?.id,
+    };
+
+    // 5xx — ERROR, 4xx — WARN
+    if (statusCode >= 500) {
+      this.logger.error(
+        `${method} ${url} - ${statusCode} ${code}: ${message}`,
+        exception instanceof Error ? exception.stack : undefined,
+        logContext,
+      );
+    } else {
+      this.logger.warn(
+        `${method} ${url} - ${statusCode} ${code}: ${message}`,
+        logContext,
+      );
+    }
+  }
+}
+```
+
+### Ֆիլտրի գրանցում
+
+```typescript
+// main.ts
+import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
+
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+  
+  app.useGlobalFilters(new AllExceptionsFilter());
+  
+  await app.listen(3000);
+}
+```
+
+---
+
+## 🎨 FRONTEND. ՍԽԱԼՆԵՐԻ ՄՇԱԿՈՒՄ
+
+### Error Boundary (React)
+
+```tsx
+// components/ErrorBoundary.tsx
+'use client';
+
+import { Component, ReactNode } from 'react';
+import { Button } from '@/shared/components/ui';
+import { logger } from '@/lib/logger';
+
+interface Props {
+  children: ReactNode;
+  fallback?: ReactNode;
+  onError?: (error: Error, errorInfo: React.ErrorInfo) => void;
+}
+
+interface State {
+  hasError: boolean;
+  error?: Error;
+}
+
+export class ErrorBoundary extends Component<Props, State> {
+  state: State = { hasError: false };
+
+  static getDerivedStateFromError(error: Error): State {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    // Լոգավորում ենք սխալը
+    logger.error('React Error Boundary caught error', {
+      error: error.message,
+      stack: error.stack,
+      componentStack: errorInfo.componentStack,
+    });
+    
+    // Callback ծնողի համար
+    this.props.onError?.(error, errorInfo);
+  }
+
+  handleRetry = () => {
+    this.setState({ hasError: false, error: undefined });
+  };
+
+  render() {
+    if (this.state.hasError) {
+      if (this.props.fallback) {
+        return this.props.fallback;
+      }
+      
+      return (
+        <div className="flex flex-col items-center justify-center min-h-[200px] p-8">
+          <h2 className="text-xl font-semibold text-gray-900 mb-2">
+            Ինչ-որ բան սխալ է գնացել
+          </h2>
+          <p className="text-gray-600 mb-4 text-center">
+            Այս բաժինը ցուցադրելիս սխալ է առաջացել։
+          </p>
+          <Button onClick={this.handleRetry}>
+            Կրկին փորձել
+          </Button>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+```
+
+### Error Boundary-ի օգտագործում
+
+```tsx
+// app/layout.tsx
+import { ErrorBoundary } from '@/components/ErrorBoundary';
+
+export default function RootLayout({ children }: { children: ReactNode }) {
+  return (
+    <html>
+      <body>
+        <ErrorBoundary>
+          {children}
+        </ErrorBoundary>
+      </body>
+    </html>
+  );
+}
+
+// Առանձին սեկցիաների համար
+<ErrorBoundary fallback={<ProductListSkeleton />}>
+  <ProductList />
+</ErrorBoundary>
+```
+
+### API Error Handler
+
+```typescript
+// lib/api/error-handler.ts
+
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public readonly statusCode: number,
+    public readonly code: string,
+    public readonly details?: unknown,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+
+  static fromResponse(data: any, status: number): ApiError {
+    return new ApiError(
+      data.message || 'Unknown error',
+      status,
+      data.code || 'UNKNOWN',
+      data.details,
+    );
+  }
+  
+  get isNotFound() {
+    return this.statusCode === 404;
+  }
+  
+  get isUnauthorized() {
+    return this.statusCode === 401;
+  }
+  
+  get isForbidden() {
+    return this.statusCode === 403;
+  }
+  
+  get isValidationError() {
+    return this.statusCode === 400;
+  }
+  
+  get isServerError() {
+    return this.statusCode >= 500;
+  }
+}
+
+// API client սխալների մշակմամբ
+export async function apiRequest<T>(
+  url: string,
+  options?: RequestInit,
+): Promise<T> {
+  try {
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...options?.headers,
+      },
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw ApiError.fromResponse(data, response.status);
+    }
+
+    return data.data as T;
+  } catch (error) {
+    if (error instanceof ApiError) {
+      throw error;
+    }
+    
+    // Network error կամ այլ
+    throw new ApiError(
+      'Network error. Please check your connection.',
+      0,
+      'NETWORK_ERROR',
+    );
+  }
+}
+```
+
+### React Query Error Handling
+
+```tsx
+// lib/query-client.ts
+import { QueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
+import { ApiError } from './api/error-handler';
+
+export const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: (failureCount, error) => {
+        // 4xx սխալները retry չանել
+        if (error instanceof ApiError && error.statusCode < 500) {
+          return false;
+        }
+        return failureCount < 3;
+      },
+      staleTime: 1000 * 60, // 1 րոպե
+    },
+    mutations: {
+      onError: (error) => {
+        if (error instanceof ApiError) {
+          // Ցուցադրում ենք toast սխալով
+          toast.error(error.message);
+          
+          // 401-ի դեպքում redirect login
+          if (error.isUnauthorized) {
+            window.location.href = '/login';
+          }
+        } else {
+          toast.error('Սխալ է առաջացել։ Փորձեք ավելի ուշ։');
+        }
+      },
+    },
+  },
+});
+```
+
+### Սխալների մշակում կոմպոնենտներում
+
+```tsx
+// features/products/components/ProductList.tsx
+'use client';
+
+import { useProducts } from '../hooks/useProducts';
+import { ApiError } from '@/lib/api/error-handler';
+
+export function ProductList() {
+  const { data, error, isLoading, refetch } = useProducts();
+
+  // Loading state
+  if (isLoading) {
+    return <ProductListSkeleton />;
+  }
+
+  // Error state
+  if (error) {
+    return (
+      <div className="text-center py-8">
+        {error instanceof ApiError ? (
+          <>
+            <p className="text-red-600 mb-4">{error.message}</p>
+            {error.isServerError && (
+              <Button onClick={() => refetch()}>
+                Կրկին փորձել
+              </Button>
+            )}
+          </>
+        ) : (
+          <p className="text-red-600">Սխալ է առաջացել</p>
+        )}
+      </div>
+    );
+  }
+
+  // Empty state
+  if (!data?.length) {
+    return <EmptyState message="Ապրանքներ չեն գտնվել" />;
+  }
+
+  // Success state
+  return (
+    <div className="grid grid-cols-3 gap-4">
+      {data.map(product => (
+        <ProductCard key={product.id} product={product} />
+      ))}
+    </div>
+  );
+}
+```
+
+---
+
+## 🔄 RETRY ռազմավարություններ
+
+### Exponential Backoff
+
+```typescript
+// lib/utils/retry.ts
+
+interface RetryOptions {
+  maxRetries?: number;
+  baseDelay?: number;
+  maxDelay?: number;
+  shouldRetry?: (error: Error) => boolean;
+}
+
+export async function withRetry<T>(
+  fn: () => Promise<T>,
+  options: RetryOptions = {},
+): Promise<T> {
+  const {
+    maxRetries = 3,
+    baseDelay = 1000,
+    maxDelay = 30000,
+    shouldRetry = () => true,
+  } = options;
+
+  let lastError: Error;
+  
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error as Error;
+      
+      // Retry չանել, եթե պետք չէ
+      if (!shouldRetry(lastError) || attempt === maxRetries) {
+        throw lastError;
+      }
+      
+      // Exponential backoff с jitter
+      const delay = Math.min(
+        baseDelay * Math.pow(2, attempt) + Math.random() * 1000,
+        maxDelay,
+      );
+      
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+  
+  throw lastError!;
+}
+
+// Օգտագործում
+const data = await withRetry(
+  () => fetchData(url),
+  {
+    maxRetries: 3,
+    shouldRetry: (error) => {
+      // Retry միայն սերվերային սխալների համար
+      return error instanceof ApiError && error.statusCode >= 500;
+    },
+  },
+);
+```
+
+---
+
+## 📋 ՍԽԱԼՆԵՐԻ ՄՇԱԿՄԱՆ ԿԱՆՈՆՆԵՐ
+
+### ✅ ԱՐԱ
+
+```typescript
+// ✅ Կոնկրետ սխալների տիպեր
+throw new NotFoundError('User', userId);
+
+// ✅ Տեղեկատվական հաղորդագրություններ
+throw new ValidationError('Invalid email format', [
+  { field: 'email', code: 'INVALID_FORMAT', message: 'Email must be valid' }
+]);
+
+// ✅ Լոգավորում կոնտեքստով
+logger.error('Payment failed', { orderId, amount, errorCode: err.code });
+
+// ✅ Graceful degradation
+try {
+  const recommendations = await getRecommendations();
+  return recommendations;
+} catch (error) {
+  // Վերադարձնել դատարկ զանգված փոխարեն crash-ի
+  return [];
+}
+
+// ✅ Սխալի տիպի ստուգում
+if (error instanceof NotFoundError) {
+  // 404-ի մշակում
+}
+```
+
+### ❌ ՄԻ ԱՐԱ
+
+```typescript
+// ❌ Սխալների «խեղդում»
+try {
+  await doSomething();
+} catch (error) {
+  // Դատարկ catch = տեղեկատվության կորուստ
+}
+
+// ❌ Ոչ տեղեկատվական հաղորդագրություններ
+throw new Error('Error');
+throw new Error('Something went wrong');
+
+// ❌ Զգայուն տվյալների լոգավորում
+logger.error('Login failed', { email, password }); // ❌ password!
+
+// ❌ any-ի օգտագործում սխալների համար
+catch (error: any) {
+  console.log(error.message); // Կարող է undefined լինել
+}
+```
+
+---
+
+## 📋 CHECKLIST
+
+### Backend
+
+- [ ] Ստեղծված է `AppError` բազային դասը
+- [ ] Ստեղծված են սպեցիֆիկ սխալների դասեր (NotFoundError և այլն)
+- [ ] Կարգավորված է GlobalExceptionFilter
+- [ ] Prisma սխալները մշակվում են ճիշտ
+- [ ] Սխալների լոգավորում կոնտեքստով
+- [ ] Լոգերում զգայուն տվյալներ չկան
+
+### Frontend
+
+- [ ] ErrorBoundary վերին մակարդակում
+- [ ] ErrorBoundary կրիտիկական սեկցիաների համար
+- [ ] API client սխալների մշակմամբ
+- [ ] React Query կարգավորված retry լոգիկայով
+- [ ] Օգտատիրոջը ցուցադրվում են հասկանալի հաղորդագրություններ
+- [ ] Կա գործողությունը կրկնելու հնարավորություն
+
+---
+
+**Տարբերակ.** 1.0
+**Ամսաթիվ.** 2026-02-12

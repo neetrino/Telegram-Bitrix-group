@@ -1,0 +1,713 @@
+---
+description: Վիճակի կառավարման կանոններ։ Server state, Client state, Form state, URL state։
+globs: ["**/*.tsx", "**/hooks/**", "**/store/**", "**/features/**"]
+alwaysApply: false
+---
+
+# ՎԻՃԱԿԻ ԿԱՌԱՎԱՐՄԱՆ ԿԱՆՈՆՆԵՐ
+
+> Ճիշտ վիճակ ճիշտ տեղում։ Ամեն ինչ պետք չէ պահել գլոբալ store-ում։
+
+---
+
+## 🎯 ՀԻՄՆԱԿԱՆ ՍԿԶԲՈՒՆՔՆԵՐ
+
+1. **Նվազագույն վիճակ** — derive երբ հնարավոր է
+2. **Colocation** — վիճակը մոտ օգտագործմանը
+3. **Տիպերի բաժանում** — server state ≠ client state
+4. **Single Source of Truth** — մեկ ճշմարտության աղբյուր
+
+---
+
+## 📊 ՎԻՃԱԿԻ ՏԻՊԵՐ
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      ՎԻՃԱԿԻ ՏԻՊԵՐ                          │
+├─────────────────┬─────────────────┬─────────────────────────┤
+│  SERVER STATE   │  CLIENT STATE   │     FORM STATE          │
+│                 │                 │                         │
+│  API-ից տվյալներ│  UI վիճակ       │  Ձևի տվյալներ          │
+│  React Query    │  Zustand        │  React Hook Form        │
+│  SWR            │  Context        │  Formik                 │
+│                 │  useState       │                         │
+├─────────────────┴─────────────────┴─────────────────────────┤
+│                       URL STATE                             │
+│                                                             │
+│  Ֆիլտրեր, պագինացիա, մոդալ պատուհաններ                    │
+│  useSearchParams, nuqs                                      │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🌐 SERVER STATE (React Query)
+
+### Երբ օգտագործել
+
+- API/backend-ից տվյալներ
+- Տվյալներ, որոնք պետք է cache անել
+- Տվյալներ, որոնք սինխրոնացվում են tab-երի միջև
+
+### Հիմնական կարգավորում
+
+```typescript
+// lib/query-client.ts
+import { QueryClient } from '@tanstack/react-query';
+
+export const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 1000 * 60,        // 1 րոպե — տվյալները թարմ
+      gcTime: 1000 * 60 * 5,       // 5 րոպե — պահել cache-ում
+      retry: 1,                    // 1 retry սխալի դեպքում
+      refetchOnWindowFocus: false, // Ֆոկուսի դեպքում refetch չանել
+    },
+    mutations: {
+      retry: 0,
+    },
+  },
+});
+```
+
+### Query Hooks
+
+```typescript
+// features/products/hooks/useProducts.ts
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { productApi } from '../api/productApi';
+import type { ProductFilters, CreateProductDTO } from '../types';
+
+// Query Keys — կենտրոնացված
+export const productKeys = {
+  all: ['products'] as const,
+  lists: () => [...productKeys.all, 'list'] as const,
+  list: (filters: ProductFilters) => [...productKeys.lists(), filters] as const,
+  details: () => [...productKeys.all, 'detail'] as const,
+  detail: (id: string) => [...productKeys.details(), id] as const,
+};
+
+// Ցանկի ստացում
+export function useProducts(filters: ProductFilters) {
+  return useQuery({
+    queryKey: productKeys.list(filters),
+    queryFn: () => productApi.getList(filters),
+    // Placeholder մինչև բեռնումը
+    placeholderData: (previousData) => previousData,
+  });
+}
+
+// Մեկ ապրանքի ստացում
+export function useProduct(id: string) {
+  return useQuery({
+    queryKey: productKeys.detail(id),
+    queryFn: () => productApi.getById(id),
+    enabled: !!id, // Չգործարկել, եթե id չկա
+  });
+}
+
+// Ապրանքի ստեղծում
+export function useCreateProduct() {
+  const queryClient = useQueryClient();
+  
+  return useMutation({
+    mutationFn: (data: CreateProductDTO) => productApi.create(data),
+    onSuccess: () => {
+      // Ինվալիդացնում ենք ցանկերը
+      queryClient.invalidateQueries({ queryKey: productKeys.lists() });
+    },
+  });
+}
+
+// Ապրանքի թարմացում
+export function useUpdateProduct() {
+  const queryClient = useQueryClient();
+  
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: UpdateProductDTO }) => 
+      productApi.update(id, data),
+    onSuccess: (updatedProduct) => {
+      // Թարմացնում ենք դետալ էջի cache-ը
+      queryClient.setQueryData(
+        productKeys.detail(updatedProduct.id),
+        updatedProduct
+      );
+      // Ինվալիդացնում ենք ցանկերը
+      queryClient.invalidateQueries({ queryKey: productKeys.lists() });
+    },
+  });
+}
+
+// Ջնջում
+export function useDeleteProduct() {
+  const queryClient = useQueryClient();
+  
+  return useMutation({
+    mutationFn: (id: string) => productApi.delete(id),
+    onSuccess: (_, deletedId) => {
+      // Ջնջում cache-ից
+      queryClient.removeQueries({ queryKey: productKeys.detail(deletedId) });
+      // Ինվալիդացնում ենք ցանկերը
+      queryClient.invalidateQueries({ queryKey: productKeys.lists() });
+    },
+  });
+}
+```
+
+### Optimistic Updates
+
+```typescript
+export function useToggleFavorite() {
+  const queryClient = useQueryClient();
+  
+  return useMutation({
+    mutationFn: (productId: string) => productApi.toggleFavorite(productId),
+    
+    // Optimistic update
+    onMutate: async (productId) => {
+      // Չեղարկում ենք ընթացիկ հարցումները
+      await queryClient.cancelQueries({ queryKey: productKeys.detail(productId) });
+      
+      // Պահպանում ենք նախորդ արժեքը
+      const previousProduct = queryClient.getQueryData(
+        productKeys.detail(productId)
+      );
+      
+      // Օպտիմիստիկ թարմացում
+      queryClient.setQueryData(
+        productKeys.detail(productId),
+        (old: Product) => ({
+          ...old,
+          isFavorite: !old.isFavorite,
+        })
+      );
+      
+      return { previousProduct };
+    },
+    
+    // Հետարկում սխալի դեպքում
+    onError: (err, productId, context) => {
+      queryClient.setQueryData(
+        productKeys.detail(productId),
+        context?.previousProduct
+      );
+    },
+    
+    // Սինխրոնացում mutation-ից հետո
+    onSettled: (_, __, productId) => {
+      queryClient.invalidateQueries({ queryKey: productKeys.detail(productId) });
+    },
+  });
+}
+```
+
+---
+
+## 🏠 CLIENT STATE (Zustand)
+
+### Երբ օգտագործել
+
+- UI վիճակ (թեմա, sidebar բաց)
+- Գնման զամբյուղ
+- Աուտորիզացված օգտատիրոջ տվյալներ
+- Վիճակ, որը սերվերից ՉԷ
+
+### Հիմնական store
+
+```typescript
+// store/useCartStore.ts
+import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
+import { immer } from 'zustand/middleware/immer';
+
+interface CartItem {
+  productId: string;
+  name: string;
+  price: number;
+  quantity: number;
+}
+
+interface CartState {
+  items: CartItem[];
+  isOpen: boolean;
+}
+
+interface CartActions {
+  addItem: (item: Omit<CartItem, 'quantity'>) => void;
+  removeItem: (productId: string) => void;
+  updateQuantity: (productId: string, quantity: number) => void;
+  clearCart: () => void;
+  toggleCart: () => void;
+}
+
+export const useCartStore = create<CartState & CartActions>()(
+  persist(
+    immer((set) => ({
+      // State
+      items: [],
+      isOpen: false,
+
+      // Actions
+      addItem: (item) =>
+        set((state) => {
+          const existingItem = state.items.find(
+            (i) => i.productId === item.productId
+          );
+          
+          if (existingItem) {
+            existingItem.quantity += 1;
+          } else {
+            state.items.push({ ...item, quantity: 1 });
+          }
+        }),
+
+      removeItem: (productId) =>
+        set((state) => {
+          state.items = state.items.filter((i) => i.productId !== productId);
+        }),
+
+      updateQuantity: (productId, quantity) =>
+        set((state) => {
+          const item = state.items.find((i) => i.productId === productId);
+          if (item) {
+            if (quantity <= 0) {
+              state.items = state.items.filter((i) => i.productId !== productId);
+            } else {
+              item.quantity = quantity;
+            }
+          }
+        }),
+
+      clearCart: () =>
+        set((state) => {
+          state.items = [];
+        }),
+
+      toggleCart: () =>
+        set((state) => {
+          state.isOpen = !state.isOpen;
+        }),
+    })),
+    {
+      name: 'cart-storage',
+      storage: createJSONStorage(() => localStorage),
+      partialize: (state) => ({ items: state.items }), // Միայն items storage-ում
+    }
+  )
+);
+
+// Սելեկտորներ (հաշվարկված արժեքներ)
+export const useCartTotal = () =>
+  useCartStore((state) =>
+    state.items.reduce((sum, item) => sum + item.price * item.quantity, 0)
+  );
+
+export const useCartItemCount = () =>
+  useCartStore((state) =>
+    state.items.reduce((sum, item) => sum + item.quantity, 0)
+  );
+```
+
+### Օգտագործում
+
+```tsx
+// components/CartButton.tsx
+'use client';
+
+import { useCartStore, useCartItemCount } from '@/store/useCartStore';
+
+export function CartButton() {
+  const toggleCart = useCartStore((state) => state.toggleCart);
+  const itemCount = useCartItemCount();
+
+  return (
+    <button onClick={toggleCart} className="relative">
+      <ShoppingCartIcon />
+      {itemCount > 0 && (
+        <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-5 h-5">
+          {itemCount}
+        </span>
+      )}
+    </button>
+  );
+}
+```
+
+### Store UI վիճակի համար
+
+```typescript
+// store/useUIStore.ts
+import { create } from 'zustand';
+
+interface UIState {
+  sidebarOpen: boolean;
+  theme: 'light' | 'dark' | 'system';
+  modalStack: string[];
+}
+
+interface UIActions {
+  toggleSidebar: () => void;
+  setTheme: (theme: UIState['theme']) => void;
+  openModal: (modalId: string) => void;
+  closeModal: (modalId?: string) => void;
+}
+
+export const useUIStore = create<UIState & UIActions>((set) => ({
+  sidebarOpen: true,
+  theme: 'system',
+  modalStack: [],
+
+  toggleSidebar: () =>
+    set((state) => ({ sidebarOpen: !state.sidebarOpen })),
+
+  setTheme: (theme) => set({ theme }),
+
+  openModal: (modalId) =>
+    set((state) => ({ modalStack: [...state.modalStack, modalId] })),
+
+  closeModal: (modalId) =>
+    set((state) => ({
+      modalStack: modalId
+        ? state.modalStack.filter((id) => id !== modalId)
+        : state.modalStack.slice(0, -1),
+    })),
+}));
+```
+
+---
+
+## 📝 FORM STATE (React Hook Form)
+
+### Երբ օգտագործել
+
+- Ցանկացած ձև
+- Վալիդացիա
+- Ձևերի բարդ լոգիկա
+
+### Հիմնական ձև
+
+```tsx
+// components/ProductForm.tsx
+'use client';
+
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
+
+const productSchema = z.object({
+  name: z.string().min(1, 'Անունը պարտադիր է').max(255),
+  description: z.string().max(5000).optional(),
+  price: z.number().min(0, 'Գինը չի կարող բացասական լինել'),
+  categoryId: z.string().uuid('Ընտրի՛ր կատեգորիա'),
+  isActive: z.boolean().default(true),
+});
+
+type ProductFormData = z.infer<typeof productSchema>;
+
+interface Props {
+  defaultValues?: Partial<ProductFormData>;
+  onSubmit: (data: ProductFormData) => Promise<void>;
+}
+
+export function ProductForm({ defaultValues, onSubmit }: Props) {
+  const {
+    register,
+    handleSubmit,
+    formState: { errors, isSubmitting },
+    reset,
+  } = useForm<ProductFormData>({
+    resolver: zodResolver(productSchema),
+    defaultValues: {
+      name: '',
+      description: '',
+      price: 0,
+      isActive: true,
+      ...defaultValues,
+    },
+  });
+
+  const onSubmitHandler = async (data: ProductFormData) => {
+    try {
+      await onSubmit(data);
+      reset();
+    } catch (error) {
+      // Սխալը մշակվում է վերևում
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit(onSubmitHandler)} className="space-y-4">
+      <div>
+        <label htmlFor="name" className="block text-sm font-medium">
+          Անուն
+        </label>
+        <input
+          {...register('name')}
+          id="name"
+          className="mt-1 block w-full rounded-md border p-2"
+        />
+        {errors.name && (
+          <p className="mt-1 text-sm text-red-600">{errors.name.message}</p>
+        )}
+      </div>
+
+      <div>
+        <label htmlFor="price" className="block text-sm font-medium">
+          Գին
+        </label>
+        <input
+          {...register('price', { valueAsNumber: true })}
+          id="price"
+          type="number"
+          className="mt-1 block w-full rounded-md border p-2"
+        />
+        {errors.price && (
+          <p className="mt-1 text-sm text-red-600">{errors.price.message}</p>
+        )}
+      </div>
+
+      <button
+        type="submit"
+        disabled={isSubmitting}
+        className="w-full rounded-md bg-primary-600 py-2 text-white disabled:opacity-50"
+      >
+        {isSubmitting ? 'Պահպանվում է...' : 'Պահպանել'}
+      </button>
+    </form>
+  );
+}
+```
+
+### Form с React Query
+
+```tsx
+// Ձևի ինտեգրացիա mutation-ի հետ
+export function CreateProductForm() {
+  const createProduct = useCreateProduct();
+  
+  const handleSubmit = async (data: ProductFormData) => {
+    await createProduct.mutateAsync(data);
+  };
+  
+  return (
+    <ProductForm 
+      onSubmit={handleSubmit}
+      // Ցուցադրում ենք սերվերից սխալը
+      serverError={createProduct.error?.message}
+    />
+  );
+}
+```
+
+---
+
+## 🔗 URL STATE
+
+### Երբ օգտագործել
+
+- Ֆիլտրեր և սորտավորում
+- Պագինացիա
+- Վիճակ, որը պետք է URL-ում պահպանվի
+- Shareable վիճակ
+
+### useSearchParams (Next.js)
+
+```tsx
+// features/products/components/ProductFilters.tsx
+'use client';
+
+import { useRouter, useSearchParams, usePathname } from 'next/navigation';
+import { useCallback } from 'react';
+
+export function ProductFilters() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  
+  // Ընթացիկ արժեքներ URL-ից
+  const category = searchParams.get('category') ?? '';
+  const sort = searchParams.get('sort') ?? 'createdAt';
+  const page = Number(searchParams.get('page')) || 1;
+
+  // URL-ի թարմացում
+  const updateFilters = useCallback(
+    (updates: Record<string, string | number | null>) => {
+      const params = new URLSearchParams(searchParams.toString());
+      
+      Object.entries(updates).forEach(([key, value]) => {
+        if (value === null || value === '') {
+          params.delete(key);
+        } else {
+          params.set(key, String(value));
+        }
+      });
+      
+      // Թարմացնում ենք էջը ֆիլտրերի փոփոխության դեպքում
+      if (!('page' in updates)) {
+        params.delete('page');
+      }
+      
+      router.push(`${pathname}?${params.toString()}`);
+    },
+    [router, pathname, searchParams]
+  );
+
+  return (
+    <div className="flex gap-4">
+      <select
+        value={category}
+        onChange={(e) => updateFilters({ category: e.target.value })}
+      >
+        <option value="">Բոլոր կատեգորիաները</option>
+        <option value="electronics">Էլեկտրոնիկա</option>
+        <option value="clothing">Հագուստ</option>
+      </select>
+
+      <select
+        value={sort}
+        onChange={(e) => updateFilters({ sort: e.target.value })}
+      >
+        <option value="createdAt">Ըստ ամսաթվի</option>
+        <option value="price">Ըստ գնի</option>
+        <option value="name">Ըստ անվան</option>
+      </select>
+    </div>
+  );
+}
+```
+
+### nuqs (Type-safe URL state)
+
+```tsx
+// nuqs-ով ավելի հարմար եղանակ
+import { useQueryState, parseAsInteger, parseAsString } from 'nuqs';
+
+export function ProductFilters() {
+  const [category, setCategory] = useQueryState('category');
+  const [sort, setSort] = useQueryState('sort', parseAsString.withDefault('createdAt'));
+  const [page, setPage] = useQueryState('page', parseAsInteger.withDefault(1));
+
+  return (
+    <div className="flex gap-4">
+      <select
+        value={category ?? ''}
+        onChange={(e) => setCategory(e.target.value || null)}
+      >
+        <option value="">Բոլոր կատեգորիաները</option>
+        <option value="electronics">Էլեկտրոնիկա</option>
+      </select>
+      
+      <Pagination
+        currentPage={page}
+        onPageChange={setPage}
+      />
+    </div>
+  );
+}
+```
+
+---
+
+## 🚫 ԱՆՏԻՊԱԹԵՐՆԵՐ
+
+### ❌ Մի արա
+
+```tsx
+// ❌ Server data գլոբալ store-ում
+const useStore = create((set) => ({
+  products: [],
+  fetchProducts: async () => {
+    const products = await api.getProducts();
+    set({ products });
+  },
+}));
+
+// ❌ Վիճակի կրկնօրինակում
+const [localUser, setLocalUser] = useState(user); // user արդեն կա։
+
+// ❌ Derived state useState-ում
+const [total, setTotal] = useState(0);
+useEffect(() => {
+  setTotal(items.reduce((sum, i) => sum + i.price, 0));
+}, [items]);
+
+// ❌ Չափից շատ գլոբալ store-ում
+const useStore = create((set) => ({
+  user: null,
+  products: [],
+  orders: [],
+  cart: [],
+  notifications: [],
+  // ... ամեն ինչ մի տեղում
+}));
+```
+
+### ✅ Արա
+
+```tsx
+// ✅ Server data React Query-ով
+const { data: products } = useProducts();
+
+// ✅ Օգտագործի՛ր աղբյուրի տվյալները
+<UserProfile user={user} />
+
+// ✅ Derive state
+const total = items.reduce((sum, i) => sum + i.price, 0);
+
+// ✅ Բաժանի՛ր store-երը ըստ դոմենների
+const useCartStore = create(...);
+const useUIStore = create(...);
+const useAuthStore = create(...);
+```
+
+---
+
+## 📋 ՎԻՃԱԿԻ ՏԻՊԻ ԸՆՏՐՈՒԹՅՈՒՆ
+
+```markdown
+## Որոշումների ծառ
+
+Տվյալներ սերվերից՞
+├── Այո → React Query / SWR
+└── Ոչ
+    └── URL-ում պե՞տք է
+        ├── Այո → useSearchParams / nuqs
+        └── Ոչ
+            └── Գլոբալ՞
+                ├── Այո → Zustand
+                └── Ոչ
+                    └── Ձևի տվյալնե՞ր
+                        ├── Այո → React Hook Form
+                        └── Ոչ → useState
+```
+
+---
+
+## 📋 CHECKLIST
+
+### Ընդհանուր կանոններ
+
+- [ ] Server state React Query-ում
+- [ ] Client state Zustand-ում (եթե գլոբալ է պետք)
+- [ ] Form state React Hook Form-ում
+- [ ] URL state ֆիլտրեր/պագինացիայի համար
+- [ ] Derive state կրկնօրինակման փոխարեն
+- [ ] Սելեկտորներ rerender-ների օպտիմիզացիայի համար
+
+### React Query
+
+- [ ] Query Keys-ը կենտրոնացված են
+- [ ] staleTime/gcTime կարգավորված են
+- [ ] Optimistic updates որտեղ անհրաժեշտ է
+- [ ] Error handling կարգավորված է
+
+### Zustand
+
+- [ ] Store-երը բաժանված են ըստ դոմենների
+- [ ] persist անհրաժեշտ տվյալների համար
+- [ ] Սելեկտորներ granular update-ների համար
+
+---
+
+**Տարբերակ.** 1.0
+**Ամսաթիվ.** 2026-02-12

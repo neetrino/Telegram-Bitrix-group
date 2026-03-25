@@ -1,0 +1,589 @@
+---
+description: Անվտանգության կանոններ։ ՔՐԻՏԻԿԱԿԱՆ։ Կիրառվում է ամբողջ կոդին։
+globs: ["**/*.ts", "**/*.tsx", "**/*.env*", "**/api/**", "**/auth/**", "**/middleware*"]
+alwaysApply: false
+---
+
+# ԱՆՎՏԱՆԳՈՒԹՅԱՆ ԿԱՆՈՆՆԵՐ
+
+> Անվտանգությունը ընտրություն չէ, այլ պահանջ։ Այս կանոնները ՊԱՐՏԱԴԻՐ են։
+
+---
+
+## 🚨 ՔՐԻՏԻԿԱԿԱՆ ԿԱՆՈՆՆԵՐ
+
+### ԵՐԵՔԵԼԵՎ մի՛ արա
+
+```typescript
+// ❌ ԵՐԵՔԵԼԵՎ — գաղտնիքներ կոդում
+const API_KEY = 'sk_live_abc123';
+const DB_PASSWORD = 'mypassword';
+
+// ❌ ԵՐԵՔԵԼԵՎ — SQL ինժեկցիաներ
+const query = `SELECT * FROM users WHERE id = ${userId}`;
+await db.$queryRawUnsafe(query);
+
+// ❌ ԵՐԵՔԵԼԵՎ — eval և նմաններ
+eval(userInput);
+new Function(userInput)();
+
+// ❌ ԵՐԵՔԵԼԵՎ — անվտանգության անջատում
+app.use(cors({ origin: '*' })); // Միայն dev-ի համար
+// CSRF-ն անջատված է
+
+// ❌ ԵՐԵՔԵԼԵՎ — գաղտնիքների լոգավորում
+console.log('Password:', password);
+logger.info({ token: accessToken });
+```
+
+---
+
+## 🔐 ՆՎԻՐԱԳՐՈՒՄ (AUTHENTICATION)
+
+> **Auth decision.** Ինքնության հաստատման ռազմավարությունը ընտրվում է `docs/TECH_CARD.md`-ում (բաժին 5)։ **Մի իրականացնի՛ր JWT ձեռքով**, եթե TECH_CARD-ում բացահայտ նշված չէ JWT։ Default-ը Auth.js 5.x / cookie-based sessions — օգտագործի՛ր Auth.js, եթե TECH_CARD-ում այդպես է նշված։
+
+### Գաղտնաբառեր
+
+```typescript
+// ✅ Գաղտնաբառերի հեշավորում
+import { hash, verify, argon2id } from 'argon2';
+
+// Հեշավորում գրանցման ժամանակ
+const passwordHash = await hash(password, {
+  type: argon2id,
+  memoryCost: 65536,  // 64 MB
+  timeCost: 3,
+  parallelism: 4,
+});
+
+// Ստուգում մուտքի ժամանակ
+const isValid = await verify(user.passwordHash, password);
+
+// ❌ ԵՐԵՔԵԼԵՎ
+const passwordHash = md5(password);     // Թույլ ալգորիթմ
+const passwordHash = sha256(password);  // Առանց salt
+```
+
+### JWT Թոքեններ
+
+```typescript
+// ✅ JWT-ի ճիշտ կարգավորում (HS256 + symmetric secret)
+import jwt from 'jsonwebtoken';
+
+const accessToken = jwt.sign(
+  { userId: user.id, role: user.role },
+  process.env.JWT_SECRET!,
+  { 
+    expiresIn: '15m',           // Կարճ ժամկետ
+    algorithm: 'HS256',         // Սիմետրիկ ալգորիթմ (secret string)
+    issuer: 'api.example.com',
+    audience: 'example.com',
+  }
+);
+
+// Refresh token — երկար ժամկետ, պահել ԲԴ-ում
+const refreshToken = jwt.sign(
+  { userId: user.id, tokenId: uuid() },
+  process.env.JWT_REFRESH_SECRET!,
+  { expiresIn: '7d' }
+);
+
+// Եթե RS256 (ասիմետրիկ) է պետք — օգտագործի՛ր key pair
+// const accessToken = jwt.sign(payload, privateKey, { algorithm: 'RS256' });
+
+// ❌ ՍԽԱԼ
+const token = jwt.sign(payload, 'secret'); // Թույլ գաղտնիք
+jwt.sign(payload, secret, { expiresIn: '30d' }); // Չափից երկար access-ի համար
+```
+
+### Սեսիաներ
+
+```typescript
+// ✅ Անվտանգ cookie-ներ սեսիաների համար
+res.cookie('sessionId', sessionId, {
+  httpOnly: true,     // JS-ից հասանելի չէ
+  secure: true,      // Միայն HTTPS
+  sameSite: 'strict', // CSRF-ից պաշտպանություն
+  maxAge: 7 * 24 * 60 * 60 * 1000, // 7 օր
+  path: '/',
+  domain: '.example.com',
+});
+```
+
+---
+
+## 🛡️ ՊԱՇՏՊԱՆՈՒԹՅՈՒՆ ՀԱՄԱՐԿԻՑ
+
+### XSS (Cross-Site Scripting)
+
+```typescript
+// ✅ Ելքի էկրանավորում
+import { escape } from 'html-escaper';
+
+const safeHtml = escape(userInput);
+
+// ✅ Content Security Policy
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:", "https:"],
+      connectSrc: ["'self'", "https://api.example.com"],
+    },
+  },
+}));
+
+// ✅ React-ը ավտոմատ էկրանավորում է
+return <div>{userInput}</div>; // Անվտանգ
+
+// ❌ ՎՏԱՆԳԱՎՈՐ — dangerouslySetInnerHTML
+<div dangerouslySetInnerHTML={{ __html: userInput }} />
+```
+
+### CSRF (Cross-Site Request Forgery)
+
+```typescript
+// ✅ Next.js — Server Actions-ը ունեն ներկառուցված CSRF-պաշտպանություն
+// (origin-ը ստուգվում է ավտոմատ, SameSite cookies)
+// Լրացուցիչ — SameSite cookies սեսիաների համար
+cookies().set('session', value, { sameSite: 'strict', httpOnly: true, secure: true });
+
+// ✅ NestJS — սեփական CSRF guard
+// Տարբերակ 1. Double Submit Cookie
+@Injectable()
+export class CsrfGuard implements CanActivate {
+  canActivate(context: ExecutionContext): boolean {
+    const req = context.switchToHttp().getRequest();
+    const cookieToken = req.cookies['csrf-token'];
+    const headerToken = req.headers['x-csrf-token'];
+    if (!cookieToken || cookieToken !== headerToken) {
+      throw new ForbiddenException('Invalid CSRF token');
+    }
+    return true;
+  }
+}
+
+// ✅ SameSite cookies (երկու stack-ի համար)
+res.cookie('session', value, { sameSite: 'strict' });
+```
+
+> ⚠️ `csurf` փաթեթը deprecated է (արխիվացված 2022-ից)։ Չօգտագործել։
+
+### SQL Injection
+
+```typescript
+// ✅ Prisma-ն ավտոմատ պաշտպանում է
+const user = await prisma.user.findFirst({
+  where: { email: userInput }, // Անվտանգ
+});
+
+// ✅ Պարամետրացված հարցումներ
+const result = await prisma.$queryRaw`
+  SELECT * FROM users WHERE email = ${userInput}
+`; // Անվտանգ — Prisma-ն էկրանավորում է
+
+// ❌ ԵՐԵՔԵԼԵՎ
+await prisma.$queryRawUnsafe(
+  `SELECT * FROM users WHERE email = '${userInput}'`
+);
+```
+
+### NoSQL Injection
+
+```typescript
+// ✅ Տիպերի վալիդացիա
+const userId = z.string().uuid().parse(userInput);
+
+// ❌ ՎՏԱՆԳԱՎՈՐ — առանց վալիդացիայի
+const user = await db.findOne({ 
+  _id: userInput // Կարող է լինել { $ne: null }
+});
+```
+
+---
+
+## 🔒 ԱՎԹՈՐԻԶԱՑԻԱ (AUTHORIZATION)
+
+### RBAC (Role-Based Access Control)
+
+```typescript
+// ✅ Դերերի ստուգում
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles('admin', 'manager')
+@Delete(':id')
+async delete(@Param('id') id: string) {
+  return this.service.delete(id);
+}
+
+// ✅ Ռեսուրսի սեփականատիրոջ ստուգում
+async updateOrder(orderId: string, userId: string, data: UpdateOrderDto) {
+  const order = await this.prisma.order.findUnique({
+    where: { id: orderId },
+  });
+  
+  if (!order) {
+    throw new NotFoundException();
+  }
+  
+  // Սեփականատիրոջ ստուգում
+  if (order.userId !== userId) {
+    throw new ForbiddenException('You can only edit your own orders');
+  }
+  
+  return this.prisma.order.update({
+    where: { id: orderId },
+    data,
+  });
+}
+```
+
+### Նվազագույն արտոնությունների սկզբունք
+
+```typescript
+// ✅ Վերադարձրու՛ միայն անհրաժեշտ դաշտերը
+const user = await prisma.user.findUnique({
+  where: { id },
+  select: {
+    id: true,
+    name: true,
+    email: true,
+    // Չվերադարձնել. passwordHash, role, internalNotes
+  },
+});
+
+// ✅ Տարբեր DTO տարբեր մուտքի մակարդակների համար
+export class UserPublicDto {
+  id: string;
+  name: string;
+}
+
+export class UserPrivateDto extends UserPublicDto {
+  email: string;
+  phone: string;
+}
+
+export class UserAdminDto extends UserPrivateDto {
+  role: string;
+  createdAt: Date;
+  lastLoginAt: Date;
+}
+```
+
+---
+
+## 🔑 ԳԱՂՏՆԻՔՆԵՐ
+
+### Գաղտնիքների պահպանում
+
+```bash
+# ✅ Environment variables
+DATABASE_URL=postgresql://...
+JWT_SECRET=very-long-random-string
+API_KEY=sk_live_...
+
+# .env ֆայլը .gitignore-ում
+# ❌ ԵՐԵՔԵԼԵՎ .env commit չանել
+
+# ✅ Production — օգտագործի՛ր secrets manager
+# - AWS Secrets Manager
+# - HashiCorp Vault
+# - Kubernetes Secrets
+```
+
+### Գաղտնիքների գեներացիա
+
+```bash
+# ✅ Կրիպտոգրաֆիական ամուր գաղտնիքներ
+openssl rand -base64 32  # JWT_SECRET-ի համար
+openssl rand -hex 32     # API բանալիների համար
+
+# ❌ ԵՐԵՔԵԼԵՎ
+JWT_SECRET=secret
+JWT_SECRET=12345
+```
+
+### env փոփոխականների վալիդացիա
+
+```typescript
+// ✅ Ստուգում մեկնարկի ժամանակ
+import { z } from 'zod';
+
+const envSchema = z.object({
+  DATABASE_URL: z.string().url(),
+  JWT_SECRET: z.string().min(32),
+  NODE_ENV: z.enum(['development', 'production', 'test']),
+});
+
+const env = envSchema.parse(process.env);
+
+export default env;
+```
+
+---
+
+## 📝 ՄՈՒՏՔԱՅԻՆ ՏՎՅԱԼՆԵՐԻ ՎԱԼԻԴԱՑԻԱ
+
+### Ընդհանուր կանոններ
+
+```typescript
+// ✅ Վալիդացրու՛ ԱՄԲՈՂՋ մուտքը
+import { z } from 'zod';
+
+const createUserSchema = z.object({
+  email: z.string().email().max(255),
+  password: z.string().min(8).max(100),
+  name: z.string().min(1).max(100).optional(),
+});
+
+// ✅ Սանիտիզացիա
+const sanitizedInput = input
+  .trim()
+  .replace(/[<>]/g, ''); // HTML թեգերի հեռացում
+
+// ✅ Չափի սահմանափակումներ
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ limit: '1mb', extended: true }));
+```
+
+### Ֆայլերի բեռնում
+
+```typescript
+// ✅ Տիպի և չափի ստուգում
+const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+const MAX_SIZE = 5 * 1024 * 1024; // 5MB
+
+async function uploadFile(file: Express.Multer.File) {
+  // MIME type-ի ստուգում
+  if (!ALLOWED_TYPES.includes(file.mimetype)) {
+    throw new BadRequestException('Invalid file type');
+  }
+  
+  // Չափի ստուգում
+  if (file.size > MAX_SIZE) {
+    throw new BadRequestException('File too large');
+  }
+  
+  // Ստեղծի՛ր նոր ֆայլի անուն
+  const filename = `${uuid()}${path.extname(file.originalname)}`;
+  
+  // originalname-ը ՈՉ օգտագործել ուղղակի
+}
+```
+
+---
+
+## 🌐 HTTPS ԵՎ HEADERS
+
+### Security Headers
+
+```typescript
+// ✅ Օգտագործի՛ր helmet
+import helmet from 'helmet';
+
+app.use(helmet());
+
+// Կամ կարգավորի՛ր ձեռքով
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  res.setHeader('Content-Security-Policy', "default-src 'self'");
+  next();
+});
+```
+
+### CORS
+
+```typescript
+// ✅ CORS-ի ճիշտ կարգավորում
+app.use(cors({
+  origin: [
+    'https://example.com',
+    'https://admin.example.com',
+  ],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true,
+  maxAge: 86400, // 24 ժամ
+}));
+
+// ❌ ԵՐԵՔԵԼԵՎ production-ում
+app.use(cors({ origin: '*' }));
+```
+
+---
+
+## 📊 ԼՈԳԱՎՈՐՄԱՆ ԿԱՆՈՆՆԵՐ
+
+### Ինչ լոգավորել
+
+```typescript
+// ✅ Լոգավորի՛ր անվտանգ տվյալներ
+logger.info('User logged in', { userId: user.id, ip: req.ip });
+logger.warn('Failed login attempt', { email, ip: req.ip, attempts });
+logger.error('Payment failed', { orderId, errorCode });
+
+// ❌ ԵՐԵՔԵԼԵՎ մի լոգավորել
+logger.info('Login', { email, password }); // Գաղտնաբառ
+logger.debug('Token', { accessToken });    // Թոքեն
+logger.info('Card', { cardNumber });       // Վճարային տվյալներ
+```
+
+### Տվյալների դիմակավորում
+
+```typescript
+// ✅ Դիմակավորի՛ր զգայուն տվյալները
+function maskEmail(email: string): string {
+  const [local, domain] = email.split('@');
+  return `${local[0]}***@${domain}`;
+}
+
+function maskCard(card: string): string {
+  return `****${card.slice(-4)}`;
+}
+
+logger.info('Payment processed', {
+  email: maskEmail(user.email),
+  card: maskCard(cardNumber),
+});
+```
+
+---
+
+## 📋 ԱՆՎՏԱՆԳՈՒԹՅԱՆ ՍՏՈՒԳԱՑՈՒՑԱԿ
+
+### Դեպլոյից առաջ
+
+- [ ] Բոլոր գաղտնիքները environment variables-ում
+- [ ] .env-ն .gitignore-ում
+- [ ] HTTPS-ը միացված է
+- [ ] Security headers-ը կարգավորված են
+- [ ] CORS-ը սահմանափակված է
+- [ ] Rate limiting-ը միացված է
+- [ ] Բոլոր մուտքային տվյալների վալիդացիա
+- [ ] Գաղտնաբառերը հեշավորված են (argon2/bcrypt)
+- [ ] JWT կարճ ժամկետով
+- [ ] Լոգավորում առանց գաղտնիքների
+- [ ] SQL injection-ից պաշտպանություն (ORM)
+- [ ] XSS-ից պաշտպանություն (CSP)
+- [ ] CSRF-ից պաշտպանություն
+
+### Պարբերաբար
+
+- [ ] Կախվածությունների թարմացում (npm audit)
+- [ ] Խոցելիությունների ստուգում
+- [ ] Մուտքի իրավունքների վերանայում
+- [ ] Լոգերի ստուգում
+
+---
+
+---
+
+## ☁️ ՖԱՅԼԵՐԻ ՊԱՀՊԱՆՈՒՄ (CLOUDFLARE R2)
+
+> Cloudflare R2 — բոլոր նախագծերի լռելյայն պահոցը։ `public/` միայն ստատիկ ասետների համար (favicon, robots.txt, og-image)։
+
+### Env variables (պարտադիր նախագծի մեկնարկին)
+
+```bash
+R2_ACCOUNT_ID="your_account_id"
+R2_ACCESS_KEY_ID="your_access_key"
+R2_SECRET_ACCESS_KEY="your_secret_key"
+R2_BUCKET_NAME="your_bucket_name"
+R2_PUBLIC_URL="https://pub-xxx.r2.dev"  # կամ custom domain
+```
+
+### S3-համատեղելի կլիենտ (երկու stack-ի համար ընդհանուր)
+
+```typescript
+// lib/r2.ts
+import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+
+export const r2 = new S3Client({
+  region: 'auto',
+  endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+  credentials: {
+    accessKeyId: process.env.R2_ACCESS_KEY_ID!,
+    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
+  },
+});
+
+export async function uploadFile(key: string, body: Buffer, contentType: string) {
+  await r2.send(new PutObjectCommand({
+    Bucket: process.env.R2_BUCKET_NAME!,
+    Key: key,
+    Body: body,
+    ContentType: contentType,
+  }));
+  return `${process.env.R2_PUBLIC_URL}/${key}`;
+}
+```
+
+### Next.js — Route Handler (upload)
+
+```typescript
+// app/api/upload/route.ts
+import { NextRequest, NextResponse } from 'next/server';
+import { uploadFile } from '@/lib/r2';
+import { nanoid } from 'nanoid';
+
+const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+
+export async function POST(req: NextRequest) {
+  const formData = await req.formData();
+  const file = formData.get('file') as File;
+  if (!file) return NextResponse.json({ error: 'No file' }, { status: 400 });
+
+  // Տիպի և չափի վալիդացիա
+  if (!ALLOWED_TYPES.includes(file.type)) {
+    return NextResponse.json({ error: 'File type not allowed' }, { status: 400 });
+  }
+  if (file.size > MAX_FILE_SIZE) {
+    return NextResponse.json({ error: 'File too large (max 10MB)' }, { status: 400 });
+  }
+
+  const buffer = Buffer.from(await file.arrayBuffer());
+  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const key = `uploads/${nanoid()}-${safeName}`;
+  const url = await uploadFile(key, buffer, file.type);
+
+  return NextResponse.json({ url });
+}
+```
+
+### NestJS — Upload Multer-ով
+
+```typescript
+// files/files.controller.ts
+@Controller('files')
+export class FilesController {
+  constructor(private readonly filesService: FilesService) {}
+
+  @Post('upload')
+  @UseInterceptors(FileInterceptor('file'))
+  async upload(@UploadedFile() file: Express.Multer.File) {
+    // Ֆայլի անվան սանիտիզացիա (հատուկ նիշեր, բացատների հեռացում)
+    const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const key = `uploads/${nanoid()}-${safeName}`;
+    const url = await this.filesService.upload(key, file.buffer, file.mimetype);
+    return { url };
+  }
+}
+```
+
+### Կանոններ
+
+- ✅ Բոլոր օգտատիրոջ ֆայլերը → R2
+- ✅ `public/` → միայն favicon.ico, robots.txt, sitemap.xml, og-image
+- ✅ R2-ի env vars-ը լրացված են նախագծի մեկնարկին
+- ❌ Օգտատիրոջ ֆայլեր public/-ում չպահել
+- ❌ Բեռնված ֆայլեր ռեպոզիտորիա commit չանել
+
+---
+
+**Տարբերակ.** 1.1
+**Ամսաթիվ.** 2026-02-12

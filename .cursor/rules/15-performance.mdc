@@ -1,0 +1,532 @@
+---
+description: Արտադրողականության կանոններ։ Web Vitals, օպտիմիզացիա, cache։
+globs: ["**/*.ts", "**/*.tsx", "**/app/**", "**/components/**"]
+alwaysApply: false
+---
+
+# ԱՐՏԱԴՐՈՂԱԿԱՆՈՒԹՅԱՆ ԿԱՆՈՆՆԵՐ
+
+> Արտադրողականությունը ֆիչ է։ Դանդաղ հավելված = վատ UX։
+
+---
+
+## 🎯 ՆՊԱՏԱԿԱՅԻՆ ՄԵՏՐԻԿՆԵՐ
+
+### Web Vitals (Core)
+
+| Մետրիկա | Նպատակ | Նկարագրություն |
+|---------|------|----------|
+| **LCP** (Largest Contentful Paint) | < 2.5s | Ժամանակ մինչև գլխավոր կոնտենտի նկարում |
+| **INP** (Interaction to Next Paint) | < 200ms | Արձագանք փոխազդեցությանը |
+| **CLS** (Cumulative Layout Shift) | < 0.1 | Վիզուալ կայունություն |
+
+### Լրացուցիչ մետրիկներ
+
+| Մետրիկա | Նպատակ | Նկարագրություն |
+|---------|------|----------|
+| **TTFB** (Time to First Byte) | < 800ms | Ժամանակ մինչև առաջին բայթ |
+| **FCP** (First Contentful Paint) | < 1.8s | Առաջին կոնտենտ |
+| **TTI** (Time to Interactive) | < 3.8s | Ժամանակ մինչև ինտերակտիվություն |
+
+### API մետրիկներ
+
+| Մետրիկա | Նպատակ | Նկարագրություն |
+|---------|------|----------|
+| P50 latency | < 100ms | Մեդիանա |
+| P95 latency | < 300ms | 95-րդ պերցենտիլ |
+| P99 latency | < 500ms | 99-րդ պերցենտիլ |
+
+---
+
+## 🖼️ ՊԱՏԿԵՐՆԵՐԻ ՕՊՏԻՄԻԶԱՑԻԱ
+
+### Next.js Image
+
+```tsx
+// ✅ ՃԻՇՏ — օգտագործի՛ր next/image
+import Image from 'next/image';
+
+export function ProductImage({ product }: Props) {
+  return (
+    <Image
+      src={product.imageUrl}
+      alt={product.name}
+      width={400}
+      height={400}
+      // Առաջնայնություն LCP պատկերների համար
+      priority={product.isFeatured}
+      // Lazy loading լռելյայն
+      loading="lazy"
+      // Placeholder բեռնման ժամանակ
+      placeholder="blur"
+      blurDataURL={product.blurDataUrl}
+      // Չափեր responsive-ի համար
+      sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
+      // Որակ
+      quality={80}
+    />
+  );
+}
+
+// ❌ ՍԽԱԼ — սովորական img
+<img src={product.imageUrl} alt={product.name} />
+```
+
+### Պատկերների ֆորմատներ
+
+```typescript
+// next.config.js
+module.exports = {
+  images: {
+    formats: ['image/avif', 'image/webp'],
+    deviceSizes: [640, 750, 828, 1080, 1200, 1920],
+    imageSizes: [16, 32, 48, 64, 96, 128, 256],
+    minimumCacheTTL: 60 * 60 * 24 * 30, // 30 օր
+  },
+};
+```
+
+### Պատկերների կանոններ
+
+```markdown
+## Պատկերների Checklist
+
+- [ ] Օգտագործվում է next/image
+- [ ] priority above-the-fold (LCP)-ի համար
+- [ ] loading="lazy" below-the-fold-ի համար
+- [ ] sizes նշված responsive-ի համար
+- [ ] placeholder="blur" մեծ պատկերների համար
+- [ ] Ֆորմատ. WebP կամ AVIF
+- [ ] Չափ. < 200KB hero-ի, < 50KB thumbnail-ների
+```
+
+---
+
+## 📦 ԲԱՆԴԼԻ ՕՊՏԻՄԻԶԱՑԻԱ
+
+### Code Splitting
+
+```tsx
+// ✅ Dynamic import-ներ ծանր կոմպոնենտների համար
+import dynamic from 'next/dynamic';
+
+// Բեռնում միայն անհրաժեշտության դեպքում
+const Chart = dynamic(() => import('@/components/Chart'), {
+  loading: () => <ChartSkeleton />,
+  ssr: false, // Միայն client-ում
+});
+
+const Modal = dynamic(() => import('@/components/Modal'), {
+  loading: () => null,
+});
+
+const RichTextEditor = dynamic(
+  () => import('@/components/RichTextEditor'),
+  { ssr: false }
+);
+```
+
+### Barrel export-ներ զգուշությամբ
+
+```typescript
+// ❌ ՎԱՏ — import անում է ամեն ինչ
+import { Button, Modal, Table } from '@/components';
+
+// ✅ ԼԱՎ — միայն անհրաժեշտը
+import { Button } from '@/components/ui/Button';
+
+// Կամ barrel-ը ճիշտ կարգավորի՛ր
+// components/ui/index.ts
+export { Button } from './Button';
+export { Input } from './Input';
+// Ծանր կոմպոնենտներ այստեղ մի export արա
+```
+
+### Բանդլի անալիզ
+
+```bash
+# Տեղադրում
+pnpm add @next/bundle-analyzer
+
+# next.config.js
+const withBundleAnalyzer = require('@next/bundle-analyzer')({
+  enabled: process.env.ANALYZE === 'true',
+});
+
+module.exports = withBundleAnalyzer({
+  // config
+});
+
+# Գործարկում
+ANALYZE=true pnpm build
+```
+
+### Tree Shaking
+
+```typescript
+// ✅ ՃԻՇՏ — import արա միայն անհրաժեշտը
+import { format, parseISO } from 'date-fns';
+import { debounce } from 'lodash-es';
+
+// ❌ ՎԱՏ — import անում է ամեն ինչ
+import _ from 'lodash';
+import * as dateFns from 'date-fns';
+```
+
+---
+
+## ⚡ ОПТИМИЗАЦИЯ REACT
+
+### Мемоизация
+
+```tsx
+// React.memo ցանկի կոմպոնենտների համար
+export const ProductCard = memo(function ProductCard({ product }: Props) {
+  return <div>{product.name}</div>;
+});
+
+// useMemo թանկ հաշվարկների համար
+const sortedProducts = useMemo(() => {
+  return [...products].sort((a, b) => a.price - b.price);
+}, [products]);
+
+// useCallback կայուն ֆունկցիաների համար
+const handleClick = useCallback((id: string) => {
+  onSelect(id);
+}, [onSelect]);
+```
+
+### Երբ մեմոիզացիա Չանել
+
+```tsx
+// ❌ Պետք չէ — պարզ հաշվարկներ
+const fullName = useMemo(() => `${first} ${last}`, [first, last]);
+// ✅ Պարզապես հաշվի՛ր
+const fullName = `${first} ${last}`;
+
+// ❌ Պետք չէ — պրիմիտիվ props
+<Button label="Click" /> // label — string, կայուն
+
+// ❌ Պետք չէ — կոմպոնենտն արդեն հազվադեպ է render լինում
+const Header = memo(() => ...); // Եթե Header մեկ անգամ է render լինում
+```
+
+### Virtualization երկար ցանկերի համար
+
+```tsx
+import { useVirtualizer } from '@tanstack/react-virtual';
+
+export function ProductList({ products }: Props) {
+  const parentRef = useRef<HTMLDivElement>(null);
+
+  const virtualizer = useVirtualizer({
+    count: products.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 100, // Տարրի մոտավոր բարձրություն
+    overscan: 5, // Քանի տարր render անել viewport-ից դուրս
+  });
+
+  return (
+    <div ref={parentRef} className="h-[600px] overflow-auto">
+      <div
+        style={{
+          height: `${virtualizer.getTotalSize()}px`,
+          position: 'relative',
+        }}
+      >
+        {virtualizer.getVirtualItems().map((virtualItem) => (
+          <div
+            key={virtualItem.key}
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: '100%',
+              height: `${virtualItem.size}px`,
+              transform: `translateY(${virtualItem.start}px)`,
+            }}
+          >
+            <ProductCard product={products[virtualItem.index]} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+```
+
+---
+
+## 🗄️ CACHE
+
+### Next.js Caching
+
+```tsx
+// Server Components — fetch-ի cache
+async function getProducts() {
+  const res = await fetch('https://api.example.com/products', {
+    // Cache 1 ժամ
+    next: { revalidate: 3600 },
+  });
+  return res.json();
+}
+
+// Cache անջատել
+await fetch(url, { cache: 'no-store' });
+
+// Օգտագործել cache (լռելյայն)
+await fetch(url, { cache: 'force-cache' });
+```
+
+### React Query Caching
+
+```typescript
+// lib/query-client.ts
+export const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      // Տվյալները թարմ են 1 րոպե
+      staleTime: 1000 * 60,
+      // Cache-ը պահվում է 5 րոպե
+      gcTime: 1000 * 60 * 5,
+      // Ֆոկուսի դեպքում refetch չանել (ստատիկ տվյալների համար)
+      refetchOnWindowFocus: false,
+    },
+  },
+});
+
+// Custom կարգավորումներ հարցման համար
+const { data } = useQuery({
+  queryKey: ['products', filters],
+  queryFn: () => fetchProducts(filters),
+  staleTime: 1000 * 60 * 5, // 5 րոպե այս հարցման համար
+});
+```
+
+### HTTP Caching
+
+```typescript
+// API endpoint с Cache-Control
+export async function GET(request: Request) {
+  const data = await getProducts();
+  
+  return new Response(JSON.stringify(data), {
+    headers: {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'public, max-age=300, s-maxage=600',
+      // max-age — browser-ի (5 ր)
+      // s-maxage — CDN-ի (10 ր)
+    },
+  });
+}
+```
+
+### Redis Caching (Backend)
+
+```typescript
+// services/cache.service.ts
+@Injectable()
+export class CacheService {
+  constructor(private readonly redis: Redis) {}
+
+  async get<T>(key: string): Promise<T | null> {
+    const data = await this.redis.get(key);
+    return data ? JSON.parse(data) : null;
+  }
+
+  async set(key: string, value: unknown, ttlSeconds: number): Promise<void> {
+    await this.redis.setex(key, ttlSeconds, JSON.stringify(value));
+  }
+
+  async del(key: string): Promise<void> {
+    await this.redis.del(key);
+  }
+
+  async invalidatePattern(pattern: string): Promise<void> {
+    const keys = await this.redis.keys(pattern);
+    if (keys.length > 0) {
+      await this.redis.del(...keys);
+    }
+  }
+}
+
+// Օգտագործում
+async findOne(id: string): Promise<Product> {
+  const cacheKey = `product:${id}`;
+  
+  // Ստուգում ենք cache-ը
+  const cached = await this.cache.get<Product>(cacheKey);
+  if (cached) return cached;
+  
+  // Բեռնում ԲԴ-ից
+  const product = await this.prisma.product.findUnique({ where: { id } });
+  
+  // Cache 1 ժամ
+  await this.cache.set(cacheKey, product, 3600);
+  
+  return product;
+}
+```
+
+### Ինվալիդացիայի ռազմավարություններ
+
+```typescript
+// Ինվալիդացիա թարմացման դեպքում
+async update(id: string, data: UpdateProductDto) {
+  const product = await this.prisma.product.update({
+    where: { id },
+    data,
+  });
+  
+  // Ինվալիդացնում ենք կոնկրետ բանալին
+  await this.cache.del(`product:${id}`);
+  
+  // Ինվալիդացնում ենք ցանկերը
+  await this.cache.invalidatePattern('products:list:*');
+  
+  return product;
+}
+```
+
+---
+
+## 🔧 BACKEND-Ի ՕՊՏԻՄԻԶԱՑԻԱ
+
+### Database query-ներ
+
+```typescript
+// ✅ Select միայն անհրաժեշտ դաշտերը
+const users = await prisma.user.findMany({
+  select: {
+    id: true,
+    name: true,
+    email: true,
+  },
+});
+
+// ✅ Օգտագործի՛ր include N+1-ի փոխարեն
+const orders = await prisma.order.findMany({
+  include: {
+    items: true,
+    user: { select: { id: true, name: true } },
+  },
+});
+
+// ✅ Պագինացիա
+const products = await prisma.product.findMany({
+  skip: (page - 1) * limit,
+  take: limit,
+  orderBy: { createdAt: 'desc' },
+});
+
+// ✅ Ինդեքսներ հաճախակի հարցումների համար
+// schema.prisma-ում
+// @@index([status, createdAt])
+```
+
+### Զուգահեռ հարցումներ
+
+```typescript
+// ✅ Զուգահեռ, երբ անկախ են
+const [user, orders, notifications] = await Promise.all([
+  prisma.user.findUnique({ where: { id: userId } }),
+  prisma.order.findMany({ where: { userId } }),
+  prisma.notification.findMany({ where: { userId, read: false } }),
+]);
+
+// ❌ Հաջորդաբար (դանդաղ)
+const user = await prisma.user.findUnique({ where: { id: userId } });
+const orders = await prisma.order.findMany({ where: { userId } });
+const notifications = await prisma.notification.findMany({ where: { userId } });
+```
+
+### Connection Pooling
+
+```typescript
+// prisma/schema.prisma
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  // Connection pool
+  // ?connection_limit=10&pool_timeout=30
+}
+```
+
+---
+
+## 📊 ԱՐՏԱԴՐՈՂԱԿԱՆՈՒԹՅԱՆ ՄՈՆԻՏՈՐԻՆԳ
+
+### Web Vitals Tracking
+
+```tsx
+// app/layout.tsx
+import { Analytics } from '@vercel/analytics/react';
+import { SpeedInsights } from '@vercel/speed-insights/next';
+
+export default function RootLayout({ children }: Props) {
+  return (
+    <html>
+      <body>
+        {children}
+        <Analytics />
+        <SpeedInsights />
+      </body>
+    </html>
+  );
+}
+```
+
+### Custom Metrics
+
+```typescript
+// lib/performance.ts
+export function reportWebVitals(metric: any) {
+  const { name, value, id } = metric;
+  
+  // Ուղարկում analytics
+  analytics.track('web_vital', {
+    metric: name,
+    value: Math.round(name === 'CLS' ? value * 1000 : value),
+    id,
+  });
+  
+  // Կամ սեփական backend
+  fetch('/api/metrics', {
+    method: 'POST',
+    body: JSON.stringify({ name, value, id }),
+  });
+}
+```
+
+---
+
+## 📋 CHECKLIST
+
+### Frontend
+
+- [ ] Պատկերներ next/image-ով
+- [ ] Lazy loading below-the-fold-ի համար
+- [ ] Dynamic import-ներ ծանր կոմպոնենտների համար
+- [ ] Virtualization երկար ցանկերի համար
+- [ ] Մեմոիզացիա որտեղ անհրաժեշտ է
+- [ ] Bundle size < 200KB initial JS-ի համար
+
+### Backend
+
+- [ ] Ինդեքսներ հաճախակի հարցումների վրա
+- [ ] N+1 խնդիրներ չկան
+- [ ] Պագինացիա ցանկերի համար
+- [ ] Cache «տաք» տվյալների համար
+- [ ] Զուգահեռ հարցումներ որտեղ հնարավոր է
+
+### Մետրիկներ
+
+- [ ] LCP < 2.5s
+- [ ] INP < 200ms
+- [ ] CLS < 0.1
+- [ ] API P95 < 300ms
+
+---
+
+**Տարբերակ.** 1.0
+**Ամսաթիվ.** 2026-02-12

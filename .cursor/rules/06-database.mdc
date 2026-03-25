@@ -1,0 +1,1128 @@
+---
+description: Տվյալների բազայի աշխատանքի կանոններ։ Կիրառվում է սխեմաներին, միգրացիաներին և հարցումներին։
+globs: ["**/prisma/**", "**/*.prisma", "**/db/**", "**/database/**", "**/migrations/**"]
+alwaysApply: false
+---
+
+# ՏՎՅԱԼՆԵՐԻ ԲԱԶԱՅԻ ԱՇԽԱՏԱՆՔԻ ԿԱՆՈՆՆԵՐ
+
+> PostgreSQL որպես հիմք։ Prisma որպես ORM։ Անվտանգություն և արտադրողականություն։
+
+---
+
+## 🎯 ՀԻՄՆԱԿԱՆ ՍԿԶԲՈՒՆՔՆԵՐ
+
+1. **PostgreSQL լռելյայն** — 95% նախագծերի համար
+2. **Prisma ORM** — raw SQL առանց անհրաժեշտության չօգտագործել
+3. **Միգրացիաներ պարտադիր** — բոլոր փոփոխությունները միգրացիաներով
+4. **Ինդեքսները մտածված** — բոլոր հաճախակի հարցումների համար
+
+---
+
+## 🗄️ ՏՎՅԱԼՆԵՐԻ ԲԱԶԱՅԻ ԸՆՏՐՈՒԹՅՈՒՆ
+
+### Երբ ինչ օգտագործել
+
+| Տվյալների բազա | Երբ օգտագործել | Երբ Չօգտագործել |
+|-----------------|-----------------|-------------------|
+| **PostgreSQL** | 95% նախագծեր, ACID, բարդ հարցումներ | Շատ պարզ նախագծեր |
+| **MongoDB** | Փաստաթղթեր, ճկուն սխեմա, պրոտոտիպներ | Տրանզակցիաներ, տվյալների կապեր |
+| **SQLite** | Պրոտոտիպներ, ներկառուցված հավելվածներ | Production web-հավելվածներ |
+| **Redis** | Cache, սեսիաներ, հերթեր | Հիմնական պահոց |
+
+### Ստանդարտ stack
+
+```
+Production:
+├── PostgreSQL 15+ — հիմնական ԲԴ
+├── Redis 7+ — cache և հերթեր
+└── (ընտրովի) Elasticsearch — ամբողջատեքստ որոնում
+```
+
+---
+
+## 📝 PRISMA SCHEMA
+
+### schema.prisma-ի կառուցվածք
+
+```prisma
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==========================================
+// ՕԳՏԱՏԻՐՈՂՆԵՐ ԵՎ ՆՎԻՐԱԳՐՈՒՄ
+// ==========================================
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  name      String?
+  role      UserRole @default(USER)
+  isActive  Boolean  @default(true)
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Կապեր (relations)
+  orders    Order[]
+  sessions  Session[]
+  
+  @@index([email])
+  @@index([role, isActive])
+  @@map("users")
+}
+
+enum UserRole {
+  USER
+  ADMIN
+  MANAGER
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([token])
+  @@index([userId])
+  @@map("sessions")
+}
+
+// ==========================================
+// ԱՊՐԱՆՔՆԵՐ ԵՎ ԿԱՏԵԳՈՐԻԱՆԵՐ
+// ==========================================
+
+model Category {
+  id          String  @id @default(cuid())
+  slug        String  @unique
+  name        String
+  description String?
+  parentId    String?
+  sortOrder   Int     @default(0)
+  isActive    Boolean @default(true)
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Կապեր
+  parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id])
+  children Category[] @relation("CategoryTree")
+  products Product[]
+  
+  @@index([slug])
+  @@index([parentId])
+  @@index([isActive, sortOrder])
+  @@map("categories")
+}
+
+model Product {
+  id          String  @id @default(cuid())
+  slug        String  @unique
+  sku         String? @unique
+  name        String
+  description String?
+  price       Int     // Գին կոպեկներով
+  comparePrice Int?   // Հին գին զեղչի համար
+  stock       Int     @default(0)
+  categoryId  String
+  isActive    Boolean @default(true)
+  isFeatured  Boolean @default(false)
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Կապեր
+  category   Category    @relation(fields: [categoryId], references: [id])
+  variants   Variant[]
+  images     Image[]
+  orderItems OrderItem[]
+  
+  @@index([slug])
+  @@index([sku])
+  @@index([categoryId])
+  @@index([isActive, isFeatured])
+  @@index([price])
+  @@map("products")
+}
+
+model Variant {
+  id        String @id @default(cuid())
+  productId String
+  sku       String @unique
+  name      String // "Կարմիր, L"
+  price     Int?   // Սեփական գին կամ null = ապրանքի գին
+  stock     Int    @default(0)
+  
+  // Ատրիբուտներ որպես JSON
+  attributes Json @default("{}")
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  product    Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
+  orderItems OrderItem[]
+  
+  @@index([productId])
+  @@index([sku])
+  @@map("variants")
+}
+
+model Image {
+  id        String @id @default(cuid())
+  productId String
+  url       String
+  alt       String?
+  sortOrder Int    @default(0)
+  
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  
+  @@index([productId])
+  @@map("images")
+}
+
+// ==========================================
+// ՊԱՏՎԵՐՆԵՐ
+// ==========================================
+
+model Order {
+  id          String      @id @default(cuid())
+  number      String      @unique // ORD-2024-00001
+  userId      String?
+  status      OrderStatus @default(PENDING)
+  
+  // Գումարներ կոպեկներով
+  subtotal    Int
+  discount    Int         @default(0)
+  shipping    Int         @default(0)
+  total       Int
+  
+  // Առաքման տվյալներ
+  shippingAddress Json
+  billingAddress  Json?
+  
+  // Կոնտակտ
+  email       String
+  phone       String
+  
+  // Մետա
+  notes       String?
+  metadata    Json        @default("{}")
+  
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  
+  // Կապեր
+  user        User?       @relation(fields: [userId], references: [id])
+  items       OrderItem[]
+  payments    Payment[]
+  events      OrderEvent[]
+  
+  @@index([number])
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("orders")
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+  REFUNDED
+}
+
+model OrderItem {
+  id        String @id @default(cuid())
+  orderId   String
+  productId String
+  variantId String?
+  
+  name      String // Պահպանում ենք պատվերի պահին
+  sku       String
+  price     Int    // Գին պատվերի պահին
+  quantity  Int
+  total     Int    // price * quantity
+  
+  order   Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product  @relation(fields: [productId], references: [id])
+  variant Variant? @relation(fields: [variantId], references: [id])
+  
+  @@index([orderId])
+  @@map("order_items")
+}
+
+model OrderEvent {
+  id        String   @id @default(cuid())
+  orderId   String
+  type      String   // status_changed, payment_received, note_added
+  data      Json     @default("{}")
+  createdAt DateTime @default(now())
+  createdBy String?  // User ID կամ 'system'
+  
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  
+  @@index([orderId])
+  @@index([type])
+  @@map("order_events")
+}
+
+model Payment {
+  id            String        @id @default(cuid())
+  orderId       String
+  provider      String        // stripe, idram, arca
+  externalId    String?       @unique
+  status        PaymentStatus @default(PENDING)
+  amount        Int
+  currency      String        @default("AMD")
+  metadata      Json          @default("{}")
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  order Order @relation(fields: [orderId], references: [id])
+  
+  @@index([orderId])
+  @@index([externalId])
+  @@index([status])
+  @@map("payments")
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+```
+
+---
+
+## 🔧 ՍԽԵՄԱՅԻ ԿԱՆՈՆՆԵՐ
+
+### Անվանավորում
+
+```prisma
+// ✅ ՃԻՇՏ
+model User { ... }           // PascalCase մոդելների համար
+model OrderItem { ... }      // PascalCase բաղադրյալ
+
+// Դաշտեր — camelCase
+firstName String
+createdAt DateTime
+isActive  Boolean
+
+// Enum — UPPER_SNAKE արժեքների համար
+enum OrderStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+}
+
+// Աղյուսակներ — snake_case @@map-ով
+model OrderItem {
+  ...
+  @@map("order_items")
+}
+```
+
+### ID ռազմավարություն
+
+```prisma
+// ✅ CUID — խորհուրդ (կարճ UUID-ից, դասավորելի)
+id String @id @default(cuid())
+
+// ✅ UUID — երբ համատեղելիություն է պետք
+id String @id @default(uuid())
+
+// ⚠️ Auto-increment — միայն ներքին աղյուսակների համար
+id Int @id @default(autoincrement())
+```
+
+### Պարտադիր դաշտեր
+
+```prisma
+// ✅ Միշտ ավելացրու՛ timestamps
+model Entity {
+  id        String   @id @default(cuid())
+  // ... դաշտեր
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+```
+
+---
+
+## 📊 ԻՆԴԵՔՍՆԵՐ
+
+### Երբ ավելացնել ինդեքսներ
+
+```prisma
+// ✅ Դաշտեր որոնման համար
+@@index([email])
+@@index([slug])
+
+// ✅ Դաշտեր ֆիլտրացիայի համար
+@@index([status])
+@@index([isActive])
+@@index([categoryId])
+
+// ✅ Բաղադրյալ ինդեքսներ հաճախակի հարցումների համար
+@@index([isActive, createdAt])
+@@index([userId, status])
+
+// ✅ Ունիկալ ինդեքսներ
+email String @unique
+slug  String @unique
+
+// ✅ Բաղադրյալ ունիկալ
+@@unique([productId, variantId])
+```
+
+### Ինչ Չինդեքսավորել
+
+```prisma
+// ❌ Չինդեքսավորել.
+// - Ցածր կարդինալության դաշտեր (boolean 50/50)
+// - WHERE-ում հազվադեպ օգտագործվող
+// - Մեծ տեքստային դաշտեր (description)
+```
+
+---
+
+## 🔄 ՄԻԳՐԱՑԻԱՆԵՐ
+
+### Միգրացիաների workflow
+
+```bash
+# 1. Փոխել schema.prisma
+
+# 2. Ստեղծել միգրացիա (development)
+pnpm prisma migrate dev --name add_user_role
+
+# 3. Կիրառել միգրացիան (production)
+pnpm prisma migrate deploy
+
+# 4. Գեներացնել կլիենտ
+pnpm prisma generate
+```
+
+### Միգրացիաների անվանավորում
+
+```bash
+# ✅ ՃԻՇՏ — նկարագրական անուններ
+add_users_table
+add_user_email_index
+add_order_status_column
+rename_price_to_amount
+remove_deprecated_field
+
+# ❌ ՎԱՏ
+update
+fix
+changes
+migration1
+```
+
+### Վտանգավոր միգրացիաներ
+
+```prisma
+// ⚠️ ԶԳՈՒՇԱՑԻ՛Ր — տվյալների կորուստ
+
+// Սյունակի ջնջում
+// ՆԱԽ. համոզվի՛ր, որ տվյալները պետք չեն կամ միգրացված են
+
+// Սյունակի վերանվանում
+// ՕԳՏԱԳՈՐԾԻ՛Ր @map հետընթաց համատեղելիության համար
+model User {
+  firstName String @map("first_name") // ԲԴ-ում եղել է first_name
+}
+
+// Տիպի փոփոխություն
+// ՍՏԵՂԾԻ՛Ր նոր սյունակ, միգրացրու՛ տվյալները, ջնջի՛ր հինը
+```
+
+---
+
+## 📝 PRISMA ՀԱՐՑՈՒՄՆԵՐ
+
+### Ճիշտ պատերններ
+
+```typescript
+// ✅ Select միայն անհրաժեշտ դաշտերը
+const users = await prisma.user.findMany({
+  select: {
+    id: true,
+    name: true,
+    email: true,
+  },
+});
+
+// ✅ Include կապերի համար
+const order = await prisma.order.findUnique({
+  where: { id: orderId },
+  include: {
+    items: true,
+    user: {
+      select: { id: true, name: true, email: true },
+    },
+  },
+});
+
+// ✅ Էջավորում
+const products = await prisma.product.findMany({
+  skip: (page - 1) * limit,
+  take: limit,
+  orderBy: { createdAt: 'desc' },
+});
+
+// ✅ Տրանզակցիաներ
+const [order, payment] = await prisma.$transaction([
+  prisma.order.create({ data: orderData }),
+  prisma.payment.create({ data: paymentData }),
+]);
+
+// ✅ Ինտերակտիվ տրանզակցիաներ
+const result = await prisma.$transaction(async (tx) => {
+  const product = await tx.product.findUnique({ where: { id } });
+  
+  if (product.stock < quantity) {
+    throw new Error('Insufficient stock');
+  }
+  
+  await tx.product.update({
+    where: { id },
+    data: { stock: { decrement: quantity } },
+  });
+  
+  return tx.orderItem.create({ data: itemData });
+});
+```
+
+### Հակապատերններ
+
+```typescript
+// ❌ N+1 խնդիր
+const orders = await prisma.order.findMany();
+for (const order of orders) {
+  const items = await prisma.orderItem.findMany({
+    where: { orderId: order.id },
+  }); // N լրացուցիչ հարցում
+}
+
+// ✅ Օգտագործի՛ր include
+const orders = await prisma.order.findMany({
+  include: { items: true },
+});
+
+// ❌ Բոլոր տվյալների բեռնում
+const allProducts = await prisma.product.findMany(); // Միլիոններ գրառում
+
+// ✅ Օգտագործի՛ր էջավորում
+const products = await prisma.product.findMany({
+  take: 100,
+  skip: offset,
+});
+
+// ❌ Raw SQL անհրաժեշտությունից դուրս
+const users = await prisma.$queryRaw`SELECT * FROM users WHERE ...`;
+
+// ✅ Օգտագործի՛ր Prisma Query API
+const users = await prisma.user.findMany({
+  where: { ... },
+});
+```
+
+---
+
+## 🔒 ԱՆՎՏԱՆԳՈՒԹՅՈՒՆ
+
+### SQL Injection-ից պաշտպանություն
+
+```typescript
+// ✅ Prisma-ն ավտոմատ էկրանավորում է պարամետրերը
+const user = await prisma.user.findFirst({
+  where: { email: userInput }, // Անվտանգ
+});
+
+// ⚠️ Raw SQL — օգտագործի՛ր պարամետրեր
+const result = await prisma.$queryRaw`
+  SELECT * FROM users WHERE email = ${userInput}
+`; // Prisma-ն էկրանավորում է
+
+// ❌ ԵՐԵՔԵԼԵՎ տողեր միացնել
+const result = await prisma.$queryRawUnsafe(
+  `SELECT * FROM users WHERE email = '${userInput}'` // SQL INJECTION
+);
+```
+
+### Իմուտացիոն ջնջում (soft delete)
+
+```prisma
+model Product {
+  id        String    @id @default(cuid())
+  // ...
+  deletedAt DateTime? // null = ակտիվ, ամսաթիվ = ջնջված
+  
+  @@index([deletedAt])
+}
+```
+
+```typescript
+// Middleware ավտոմատ ֆիլտրացիայի համար
+prisma.$use(async (params, next) => {
+  if (params.model === 'Product') {
+    if (params.action === 'findMany' || params.action === 'findFirst') {
+      params.args.where = {
+        ...params.args.where,
+        deletedAt: null,
+      };
+    }
+  }
+  return next(params);
+});
+```
+
+---
+
+## 💾 ԲԵՔԱՓ ԵՎ ՎԵՐԱԿԱՆԳՆՈՒՄ
+
+### Բեքափների ռազմավարություն
+
+```markdown
+## Բեքափների տիպեր
+
+| Տիպ | Հաճախականություն | Retention | Երբ օգտագործել |
+|-----|---------|-----------|-------------------|
+| Full backup | Օրական | 30 օր | Ամբողջական վերականգնում |
+| Incremental | Ժամական | 7 օր | Կետի վերականգնում |
+| WAL archiving | Անընդհատ | 7 օր | Point-in-time recovery |
+```
+
+### PostgreSQL բեքափների կարգավորում
+
+```bash
+# Ամբողջական բեքափ
+pg_dump -h localhost -U user -d database -F c -f backup_$(date +%Y%m%d).dump
+
+# Վերականգնում
+pg_restore -h localhost -U user -d database -c backup_20240115.dump
+
+# Միայն սխեմայի բեքափ
+pg_dump -h localhost -U user -d database --schema-only -f schema.sql
+
+# Միայն տվյալների բեքափ
+pg_dump -h localhost -U user -d database --data-only -f data.sql
+```
+
+### Ավտոմատացում (Docker/Kubernetes)
+
+```yaml
+# docker-compose.yml — backup service
+services:
+  backup:
+    image: postgres:15-alpine
+    environment:
+      PGHOST: postgres
+      PGUSER: ${DB_USER}
+      PGPASSWORD: ${DB_PASSWORD}
+      PGDATABASE: ${DB_NAME}
+    volumes:
+      - ./backups:/backups
+    command: |
+      sh -c 'while true; do
+        pg_dump -F c -f /backups/backup_$$(date +%Y%m%d_%H%M%S).dump
+        find /backups -mtime +30 -delete
+        sleep 86400
+      done'
+```
+
+### 🔴 ՊԱՐՏԱԴԻՐ. Restore Testing
+
+```markdown
+## Վերականգնման թեստավորման ստուգացուցակ
+
+### Ամեն ամիս
+- [ ] Վերականգնել վերջին բեքափը թեստային ԲԴ-ում
+- [ ] Ստուգել տվյալների ամբողջականությունը
+- [ ] Ստուգել, որ հավելվածը աշխատում է վերականգնված տվյալներով
+- [ ] Չափել վերականգնման ժամանակը (RTO)
+- [ ] Փաստաթղթավորել արդյունքը
+
+### Ինչ ստուգել վերականգնումից հետո
+- [ ] Գրառումների քանակը հիմնական աղյուսակներում համընկնում է
+- [ ] Կապերը (FK) խախտված չեն
+- [ ] Հավելվածը գործարկվում և աշխատում է
+- [ ] Կրիտիկ ֆունկցիաները աշխատում են (նվիրագրում, պատվերներ, վճարումներ)
+```
+
+### Վերականգնման Runbook
+
+```markdown
+## Բեքափից վերականգնում
+
+### 1. Նախապատրաստում
+- Որոշել վերականգնման կետը (որ բեքափը)
+- Ծանուցել թիմին downtime-ի մասին
+- Պատրաստել մաքուր ԲԴ կամ կանգնեցնել ընթացիկը
+
+### 2. Վերականգնում
+\`\`\`bash
+# Կանգնեցնել հավելվածը
+docker-compose stop app
+
+# Վերականգնել ԲԴ-ը
+pg_restore -h localhost -U user -d database -c backup.dump
+
+# Ստուգել
+psql -h localhost -U user -d database -c "SELECT COUNT(*) FROM users;"
+
+# Գործարկել հավելվածը
+docker-compose start app
+\`\`\`
+
+### 3. Վերահսկում
+- [ ] Հավելվածը գործարկվել է
+- [ ] Health checks-ը անցնում են
+- [ ] Smoke tests-ը անցնում են
+- [ ] Մոնիտորինգը նորմայում է
+
+### 4. Հաղորդակցում
+- Ծանուցել թիմին ավարտի մասին
+- Ստեղծել incident report
+```
+
+### Բեքափների մետրիկաներ
+
+```typescript
+// Ինչ մոնիտորել
+const backupMetrics = {
+  lastBackupTime: Date,        // Երբ էր վերջին բեքափը
+  backupSize: number,          // Բեքափի չափը
+  backupDuration: number,      // Բեքափի ստեղծման ժամանակ
+  lastRestoreTest: Date,       // Երբ թեստավորել են վերականգնումը
+  restoreDuration: number,     // Վերականգնման ժամանակ (RTO)
+};
+
+// Ալերտներ
+// - Բեքափ չի ստեղծվել > 24 ժամ
+// - Restore test չի կատարվել > 30 օր
+// - Բեքափի չափը անսովոր փոխվել է
+```
+
+---
+
+## ☁️ NEON (MANAGED POSTGRES)
+
+> Եթե օգտագործվում է Neon — վերևի շատ բաժիններ պարզեցվում են։
+
+### Ինչ Neon-ը ավտոմատ անում է
+
+```markdown
+## Բեքափներ
+- ✅ Ավտոմատ բեքափներ (կարգավորել պետք չէ)
+- ✅ Point-in-time recovery (7/30 օր՝ կախված պլանից)
+- ✅ Պահպանում առանձին տեղում (S3-համատեղելի պահոց)
+
+## Branching
+- ✅ Database branches (ինչպես git branches ԲԴ-ի համար)
+- ✅ Preview environments առանձին ԲԴ-ով
+- ✅ Instant branching (copy-on-write)
+
+## Մասշտաբավորում
+- ✅ Autoscaling compute
+- ✅ Scale to zero (խնայողություն dev-ում)
+- ✅ Read replicas (Pro պլանում)
+```
+
+### Neon Branching զարգացման համար
+
+```bash
+# docker-compose-ի փոխարեն տեղական Postgres-ով.
+# 1. Main branch = production
+# 2. Dev branch = զարգացման համար
+# 3. PR branches = preview deployments-ի համար
+
+# Branch-ի ստեղծում Neon CLI-ով
+neonctl branches create --name feature-auth
+
+# Կամ Vercel Integration — ավտոմատ յուրաքանչյուր PR-ի համար
+```
+
+### Connection String
+
+```typescript
+// .env.local (development)
+DATABASE_URL="postgresql://user:pass@ep-xxx-123.us-east-2.aws.neon.tech/neondb?sslmode=require"
+
+// Prisma — ավելացնել serverless-ի համար
+// schema.prisma
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")  // Միգրացիաների համար (առանց connection pooling)
+}
+```
+
+### Ինչ այնուամենայնիվ պետք է անել
+
+```markdown
+## Քո պատասխանատվությունը
+
+- ✅ ԲԴ սխեմա և միգրացիաներ (Prisma)
+- ✅ Ինդեքսներ արտադրողականության համար
+- ✅ Ճիշտ հարցումներ (առանց N+1)
+- ✅ Տրանզակցիաներ որտեղ պետք է
+- ✅ Soft delete կարևոր տվյալների համար
+
+## ՊԵՏՔ ՉԷ (Neon-ը անում է)
+
+- ❌ Բեքափների կարգավորում
+- ❌ docker-compose տեղական ԲԴ-ի համար
+- ❌ Restore testing (Neon-ը երաշխավորում է)
+- ❌ Սկավառակի տարածության մոնիտորինգ
+```
+
+### Neon + Vercel Integration
+
+```markdown
+## Ավտոմատ ինտեգրացիայի ժամանակ
+
+1. Preview deployment → Neon-ը ստեղծում է branch
+2. PR merged → branch-ը ջնջվում է
+3. Environment variables-ը ավտոմատ փոխանցվում են
+```
+
+---
+
+## 🛡️ POSTGRES ԴԵՐԵՐ ԵՎ ԼԻՄԻՏՆԵՐ
+
+> Նվազագույն արտոնությունների սկզբունք. runtime հավելվածը ՉԷ աշխատում owner/superuser-ի ներքո։
+
+### Ինչու է սա անհրաժեշտ
+
+Owner-դերը (Neon-ը ավտոմատ ստեղծում է) ունի `CREATE`, `DROP`, `ALTER` իրավունքներ — կարող է փոխել ԲԴ-ի կառուցվածքը։ Եթե հավելվածը կոմպրոմետացվել է (RCE, SQL injection `$queryRawUnsafe`-ով), հարձակվողը ստանում է ամբողջական վերահսկում սխեմայի նկատմամբ։ Առանձին `app_user` DML-only իրավունքներով սահմանափակում է blast radius-ը։
+
+### Դերերի մատրիցա ըստ նախագծի չափի
+
+| Դեր | Size A (փոքր) | Size B (միջին) | Size C (մեծ) |
+|-----|---------------|------------------|------------------|
+| **owner** (Neon default) | Միգրացիաներ, ձեռքով գործողություններ | Միգրացիաներ CI/CD-ում | Միգրացիաներ CI/CD-ում |
+| **app_user** | ✅ Հավելվածի runtime | ✅ Հավելվածի runtime | ✅ Հավելվածի runtime |
+| **readonly_user** | ❌ Պետք չէ | ⚠️ Ընտրովի (անալիտիկա) | ✅ Պարտադիր (անալիտիկա, աջակցություն) |
+| **analytics_user** | ❌ Պետք չէ | ❌ Պետք չէ | ⚠️ Ընտրովի (երկար հաշվետվություններ) |
+
+---
+
+### Runtime օգտատիրոջ (app_user) ստեղծում
+
+> 🔴 **Պարտադիր բոլոր նախագծերի չափերի համար (A/B/C)**
+
+```sql
+-- 1. Ստեղծել runtime դեր
+CREATE ROLE app_user WITH LOGIN PASSWORD '<գեներացնել: openssl rand -base64 32>';
+
+-- 2. Մուտք ԲԴ և սխեմա
+GRANT CONNECT ON DATABASE neondb TO app_user;
+GRANT USAGE ON SCHEMA public TO app_user;
+
+-- 3. DML-only իրավունքներ (SELECT, INSERT, UPDATE, DELETE)
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_user;
+
+-- 4. Sequences-ի իրավունքներ (CUID/autoincrement-ի համար)
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO app_user;
+
+-- 5. DEFAULT PRIVILEGES — որ նոր աղյուսակներն էլ հասանելի լինեն
+-- ⚠️ Կատարել owner-ի անունից (ով գործարկում է prisma migrate deploy)
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT USAGE, SELECT ON SEQUENCES TO app_user;
+```
+
+### Readonly օգտատիրոջ (Size B/C) ստեղծում
+
+```sql
+-- Անալիտիկայի, աջակցության, debug-ի համար
+CREATE ROLE readonly_user WITH LOGIN PASSWORD '<գեներացնել>';
+
+GRANT CONNECT ON DATABASE neondb TO readonly_user;
+GRANT USAGE ON SCHEMA public TO readonly_user;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO readonly_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT SELECT ON TABLES TO readonly_user;
+```
+
+### Analytics օգտատիրոջ (Size C) ստեղծում
+
+```sql
+-- Երկար հաշվետվությունների համար — մեղմ timeout-ներ
+CREATE ROLE analytics_user WITH LOGIN PASSWORD '<գեներացնել>';
+
+GRANT CONNECT ON DATABASE neondb TO analytics_user;
+GRANT USAGE ON SCHEMA public TO analytics_user;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO analytics_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT SELECT ON TABLES TO analytics_user;
+
+-- Մեղմ timeout-ներ երկար հարցումների համար
+ALTER ROLE analytics_user SET statement_timeout = '5min';
+ALTER ROLE analytics_user SET idle_in_transaction_session_timeout = '5min';
+ALTER ROLE analytics_user SET lock_timeout = '30s';
+ALTER ROLE analytics_user CONNECTION LIMIT 3;
+```
+
+---
+
+### CONNECTION LIMIT
+
+> Լիմիտ դնելը կախված է դեպլոյի տիպից, ոչ նախագծի չափից։
+
+| Դեպլոյի սցենար | CONNECTION LIMIT | Պատճառ |
+|-----------------|-----------------|---------|
+| **Vercel serverless** (pooled) | ❌ Դերի վրա չդնել | Neon Pooler-ը կառավարում է կապերը։ Դերի լիմիտը կբերի `too many connections` սպայքների ժամանակ |
+| **NestJS Render/Railway-ում** (long-running) | ✅ Դնել | Պաշտպանություն կապերի արտահոսքից autoscaling instance-ների ժամանակ |
+| **Monorepo (web + api)** | ✅ api-ում դնել, web-ում ոչ | Web pooler-ով, API — direct/pooled վերահսկումով |
+
+#### CONNECTION LIMIT-ի հաշվարկի բանաձև
+
+```
+CONNECTION LIMIT = (instance-ների քանակ × pool-ի չափ) + պահուստ (5-10)
+
+Օրինակներ.
+- 2 NestJS instance × 10 pool = 20 + 10 պահուստ = 30
+- 3 instance × 15 pool = 45 + 10 պահուստ = 55
+```
+
+#### Խորհուրդներ ըստ չափի
+
+| Պարամետր | Size A | Size B | Size C |
+|----------|--------|--------|--------|
+| CONNECTION LIMIT (long-running backend) | 15 | 30 | 50-100 |
+| Prisma `connection_limit` (serverless) | 3-5 | 5-10 | 10-15 |
+| Prisma `connection_limit` (long-running) | 5-10 | 10-15 | 15-25 |
+| Prisma `pool_timeout` | 10s | 15s | 15s |
+
+```sql
+-- Size A (NestJS backend)
+ALTER ROLE app_user CONNECTION LIMIT 15;
+
+-- Size B (NestJS backend)
+ALTER ROLE app_user CONNECTION LIMIT 30;
+
+-- Size C (NestJS backend, մի քանի instance)
+ALTER ROLE app_user CONNECTION LIMIT 55;
+```
+
+---
+
+### Postgres դերի մակարդակի timeout-ներ
+
+> Defence-in-depth. դերի timeout-ները լրացնում են application-level timeout-ները `18-reliability.mdc`-ից։
+
+```sql
+-- ⏱️ statement_timeout — մեկ հարցման առավելագույն ժամանակ
+-- ⏱️ idle_in_transaction_session_timeout — դադարեցնել idle տրանզակցիան
+-- ⏱️ lock_timeout — բլոկավորման առավելագույն սպասում
+```
+
+#### Արժեքների աղյուսակ ըստ չափի և սցենարի
+
+| Պարամետր | Size A (serverless) | Size A (backend) | Size B | Size C |
+|----------|--------------------|-----------------:|-------:|-------:|
+| `statement_timeout` | `10s` | `15s` | `30s` | `30s` |
+| `idle_in_transaction_session_timeout` | `20s` | `30s` | `60s` | `60s` |
+| `lock_timeout` | `5s` | `5s` | `10s` | `10s` |
+
+#### Size A — Փոքր նախագիծ
+
+```sql
+-- Vercel serverless (կոշտ լիմիտներ — serverless functions-ն ունեն իրենց timeout)
+ALTER ROLE app_user SET statement_timeout = '10s';
+ALTER ROLE app_user SET idle_in_transaction_session_timeout = '20s';
+ALTER ROLE app_user SET lock_timeout = '5s';
+```
+
+```sql
+-- NestJS backend (մի քիչ ավելի մեղմ)
+ALTER ROLE app_user SET statement_timeout = '15s';
+ALTER ROLE app_user SET idle_in_transaction_session_timeout = '30s';
+ALTER ROLE app_user SET lock_timeout = '5s';
+```
+
+#### Size B — Միջին նախագիծ
+
+```sql
+ALTER ROLE app_user SET statement_timeout = '30s';
+ALTER ROLE app_user SET idle_in_transaction_session_timeout = '60s';
+ALTER ROLE app_user SET lock_timeout = '10s';
+```
+
+#### Size C — Մեծ նախագիծ
+
+```sql
+-- app_user — նույնը ինչ Size B
+ALTER ROLE app_user SET statement_timeout = '30s';
+ALTER ROLE app_user SET idle_in_transaction_session_timeout = '60s';
+ALTER ROLE app_user SET lock_timeout = '10s';
+
+-- analytics_user — մեղմ լիմիտներ հաշվետվությունների համար
+ALTER ROLE analytics_user SET statement_timeout = '5min';
+ALTER ROLE analytics_user SET idle_in_transaction_session_timeout = '5min';
+ALTER ROLE analytics_user SET lock_timeout = '30s';
+```
+
+---
+
+### .env-ի կարգավորում դերերի բաժանման համար
+
+#### Vercel Fullstack (Size A/B)
+
+```bash
+# Runtime — app_user pooler-ով
+DATABASE_URL="postgresql://app_user:pass@ep-xxx-pooler.neon.tech/neondb?sslmode=require&connection_limit=5&pool_timeout=10"
+
+# Միգրացիաներ — owner ուղղակի (միայն CI/CD և ձեռքով գործողություններ)
+DIRECT_URL="postgresql://neon_owner:pass@ep-xxx.neon.tech/neondb?sslmode=require"
+```
+
+#### Vercel Frontend + NestJS Backend (Size B/C)
+
+```bash
+# NestJS (.env Render/Railway-ում) — app_user pooler-ով
+DATABASE_URL="postgresql://app_user:pass@ep-xxx-pooler.neon.tech/neondb?sslmode=require&connection_limit=10&pool_timeout=15"
+
+# Միգրացիաներ CI/CD-ում — owner
+DIRECT_URL="postgresql://neon_owner:pass@ep-xxx.neon.tech/neondb?sslmode=require"
+```
+
+---
+
+### ⚠️ Խոչընդոտներ
+
+#### 1. DEFAULT PRIVILEGES և Prisma migrate
+
+`ALTER DEFAULT PRIVILEGES` կիրառվում է միայն **ընթացիկ օգտատիրոջ** ստեղծած աղյուսակներին։ Համոզվի՛ր, որ.
+- `ALTER DEFAULT PRIVILEGES`-ը կատարվում է նույն owner-ի անունից, ով գործարկում է `prisma migrate deploy`
+- Յուրաքանչյուր միգրացիայից հետո `app_user`-ը ավտոմատ ստանում է մուտք նոր աղյուսակներին
+
+#### 2. Neon Branching և դերեր
+
+Neon branch ստեղծելիս դերերը **պատճենվում** են տվյալների հետ, բայց.
+- Ձեռքով ստեղծված դերերի գաղտնաբառերը **կարող են չաշխատել** preview branches-ում Vercel Integration-ի միջոցով
+- Լուծում Size A/B-ի համար. օգտագործի՛ր մեկ `app_user` գաղտնաբառ բոլոր branches-ի համար
+- Լուծում Size C-ի համար. CI-ում սկրիպտ, որը յուրաքանչյուր branch-ում վերաստեղծում/ստուգում է դերերը
+
+```bash
+# CI սկրիպտ preview branches-ի համար (Size C)
+neonctl query "DO \$\$ BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    CREATE ROLE app_user WITH LOGIN PASSWORD '$APP_USER_PASSWORD';
+  END IF;
+END \$\$;" --project-id $NEON_PROJECT_ID --branch $BRANCH_NAME
+```
+
+#### 3. idle_in_transaction և Prisma interactive transactions
+
+Prisma `$transaction(async (tx) => { ... })` callback-ի ընթացքում պահում է տրանզակցիան բաց։ Եթե ներսում արտաքին կանչեր կան (API payment, email) — կարող ես դուրս գալ `idle_in_transaction_session_timeout`-ով։
+
+```typescript
+// ❌ ՎԱՏ — արտաքին կանչ տրանզակցիայի ներսում
+await prisma.$transaction(async (tx) => {
+  const order = await tx.order.create({ data: orderData });
+  await paymentService.charge(order.id); // Կարող է կախվել
+  await tx.order.update({ where: { id: order.id }, data: { status: 'PAID' } });
+});
+
+// ✅ ՃԻՇՏ — արտաքին կանչեր տրանզակցիայից դուրս
+const order = await prisma.order.create({ data: orderData });
+const payment = await paymentService.charge(order.id);
+await prisma.order.update({ where: { id: order.id }, data: { status: 'PAID' } });
+```
+
+#### 4. CONNECTION LIMIT և autoscaling
+
+Instance-ների աճի ժամանակ (Size B → C) պետք է վերանայել `CONNECTION LIMIT`-ը.
+- Մոնիտորի՛ր `pg_stat_activity` կամ Neon Dashboard → Connections
+- Ալերտ եթե օգտագործումը > 80% լիմիտի
+- Թարմացրու՛ լիմիտը instance-ների մասշտաբավորման ՆԱԽ
+
+---
+
+## 📋 ՍՏՈՒԳԱՑՈՒՑԱԿ
+
+### Production-ից առաջ
+
+- [ ] Բոլոր ինդեքսները ստեղծված են հաճախակի հարցումների համար
+- [ ] Միգրացիաները թեստավորված են տվյալների պատճենի վրա
+- [ ] N+1 խնդիրներ չկան
+- [ ] Տրանզակցիաներ կապված գործողությունների համար
+- [ ] Իմուտացիոն ջնջում կարևոր տվյալների համար
+- [ ] Backup-ը կարգավորված է *(ավտոմատ եթե Neon)*
+- [ ] **Restore testing-ը կատարված է** *(պետք չէ եթե Neon)*
+- [ ] **RTO/RPO-ն սահմանված են** *(Neon. RPO ~0, RTO րոպեներ)*
+
+### Դերեր և լիմիտներ
+
+#### Բոլոր նախագծեր (A/B/C)
+
+- [ ] `app_user`-ը ստեղծված է DML-only իրավունքներով
+- [ ] `DEFAULT PRIVILEGES`-ը կարգավորված է owner-ի անունից
+- [ ] `DATABASE_URL`-ը օգտագործում է `app_user` (ոչ owner)
+- [ ] `DIRECT_URL`-ը օգտագործում է owner (միայն միգրացիաների համար)
+- [ ] `statement_timeout`-ը դրված է `app_user`-ի վրա
+- [ ] `idle_in_transaction_session_timeout`-ը դրված է `app_user`-ի վրա
+- [ ] `lock_timeout`-ը դրված է `app_user`-ի վրա
+- [ ] `app_user`-ի գաղտնաբառը գեներացված է կրիպտոգրաֆիական (`openssl rand -base64 32`)
+
+#### Միջին և մեծ նախագծեր (B/C)
+
+- [ ] `readonly_user`-ը ստեղծված է *(անալիտիկա/աջակցության համար)*
+- [ ] `CONNECTION LIMIT`-ը դրված է *(եթե long-running backend)*
+- [ ] Լիմիտի բանաձևը փաստաթղթավորված է *(instance × pool + պահուստ)*
+
+#### Մեծ նախագծեր (C)
+
+- [ ] `analytics_user`-ը ստեղծված է *(եթե երկար հաշվետվություններ են պետք)*
+- [ ] CI սկրիպտ դերերի ստեղծման համար preview branches-ում
+- [ ] `pg_stat_activity`-ի մոնիտորինգը կարգավորված է
+- [ ] Ալերտ CONNECTION LIMIT-ի > 80% օգտագործման համար
+
+### Backup ստուգացուցակ (self-hosted)
+
+> Բաց թողնել եթե օգտագործվում է Neon կամ այլ managed սերվիս
+
+- [ ] Ավտոմատ բեքափները կարգավորված են
+- [ ] Retention policy-ն սահմանված է
+- [ ] Բեքափները պահվում են առանձին տեղում (ոչ նույն սերվերում)
+- [ ] Restore testing-ը կատարվում է պարբերաբար (առնվազն ամսական)
+- [ ] Վերականգնման Runbook-ը փաստաթղթավորված է
+- [ ] Ալերտներ բեքափների բացակայության համար
+
+### Neon ստուգացուցակ
+
+- [ ] Ճիշտ պլանն ընտրված է (Free/Pro/Scale)
+- [ ] Vercel Integration-ը կարգավորված է (եթե Vercel)
+- [ ] Connection pooling-ը միացված է
+- [ ] `directUrl`-ը կարգավորված է միգրացիաների համար
+
+---
+
+**Տարբերակ.** 1.3
+**Ամսաթիվ.** 2026-02-12

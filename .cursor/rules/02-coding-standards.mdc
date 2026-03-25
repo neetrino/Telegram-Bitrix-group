@@ -1,0 +1,461 @@
+---
+description: Կոդավորման ընդհանուր ստանդարտներ բոլոր լեզուների և տեխնոլոգիաների համար։
+globs: ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx"]
+alwaysApply: false
+---
+
+# ԿՈԴԱՎՈՐՄԱՆ ՍՏԱՆԴԱՐՏՆԵՐ
+
+> Միասնական կանոններ մաքուր, ընթեռնելի և պահպանելի կոդի համար։
+
+---
+
+## 📏 ՉԱՓԵՐ ԵՎ ՍԱՀՄԱՆԱՓԱԿՆԵՐ
+
+### Կոշտ սահմաններ
+
+| Մետրիկա | Սահման | Գերազանցելիս |
+|---------|--------|----------------|
+| Տողեր ֆունկցիայում | ≤ 50 | Բաժանի՛ր ենթաֆունկցիաների |
+| Տողեր ֆայլում | ≤ 300 | Բաժանի՛ր մոդուլների |
+| Ֆունկցիայի պարամետրներ | ≤ 4 | Օգտագործի՛ր օբյեկտ |
+| Բնիկության մակարդակներ | ≤ 3 | Early returns |
+| Նիշեր տողում | ≤ 100 | Տողատում |
+
+### Օրինակներ
+
+```typescript
+// ❌ ՎԱՏ — չափից շատ պարամետրներ
+function createUser(
+  name: string,
+  email: string,
+  age: number,
+  address: string,
+  phone: string,
+  role: string
+) { ... }
+
+// ✅ ԼԱՎ — պարամետրների օբյեկտ
+interface CreateUserParams {
+  name: string;
+  email: string;
+  age: number;
+  address: string;
+  phone?: string;
+  role?: UserRole;
+}
+
+function createUser(params: CreateUserParams) { ... }
+```
+
+```typescript
+// ❌ ՎԱՏ — խորը բնիկություն
+function processOrder(order: Order) {
+  if (order) {
+    if (order.status === 'pending') {
+      if (order.items.length > 0) {
+        if (order.total > 0) {
+          // մակարդակ 4 — չափից խորը
+        }
+      }
+    }
+  }
+}
+
+// ✅ ԼԱՎ — early returns
+function processOrder(order: Order) {
+  if (!order) throw new Error('Order required');
+  if (order.status !== 'pending') throw new Error('Invalid status');
+  if (order.items.length === 0) throw new Error('Empty order');
+  if (order.total <= 0) throw new Error('Invalid total');
+  
+  // հիմնական լոգիկա մակարդակ 1-ում
+  return executeOrder(order);
+}
+```
+
+---
+
+## 🏷️ ԱՆՎԱՆԱՎՈՐՄԱՆ ԿԱՆՈՆՆԵՐ
+
+### Ընդհանուր կանոններ
+
+1. **Անունը պետք է պատասխանի «ԻՆՉ է սա» հարցին**
+2. **Ֆունկցիայի անունը պետք է պատասխանի «ԻՆՉ է անում» հարցին**
+3. **Խուսափի՛ր հապավումներից** (բացի ընդունվածներից. id, url, api)
+4. **Չօգտագործել հունգարական նոտացիա** (strName, arrItems)
+
+### Անվանավորման աղյուսակ
+
+| Ինչ | Ոճ | Օրինակ | Հակաօրինակ |
+|-----|-----|--------|-------------|
+| Փոփոխականներ | camelCase | `userName`, `isActive` | `user_name`, `UserName` |
+| Ֆունկցիաներ | camelCase + բայ | `getUser`, `createOrder` | `user`, `order` |
+| Դասեր | PascalCase | `UserService` | `userService` |
+| Ինտերֆեյսներ | PascalCase | `UserData` | `IUserData` |
+| Տիպեր | PascalCase | `OrderStatus` | `TOrderStatus` |
+| Հաստատուններ | UPPER_SNAKE | `MAX_RETRIES` | `maxRetries` |
+| Enum | PascalCase + UPPER արժեքներ | `Status.ACTIVE` | `Status.active` |
+| Private դաշտեր | camelCase + underscore | `_cache` | `privateCache` |
+| Boolean | is/has/can/should | `isValid`, `hasPermission` | `valid`, `permission` |
+
+### Բայեր ֆունկցիաների համար
+
+| Գործողություն | Նախածանց | Օրինակ |
+|----------------|----------|--------|
+| Ստանալ | get | `getUser`, `getProducts` |
+| Սահմանել | set | `setStatus`, `setConfig` |
+| Ստեղծել | create | `createOrder`, `createUser` |
+| Թարմացնել | update | `updateProfile`, `updateOrder` |
+| Ջնջել | delete/remove | `deleteUser`, `removeItem` |
+| Ստուգել | is/has/can | `isValid`, `hasAccess`, `canEdit` |
+| Փոխակերպել | to/from/parse | `toJSON`, `fromDTO`, `parseDate` |
+| Մշակել | handle/process | `handleSubmit`, `processPayment` |
+| Վալիդացնել | validate | `validateEmail`, `validateOrder` |
+| Հաշվել | calculate/compute | `calculateTotal`, `computeDiscount` |
+
+---
+
+## 📝 ՄԵԿՆԱԲԱՆՈՒԹՅՈՒՆՆԵՐ
+
+### Երբ մեկնաբանել
+
+```typescript
+// ✅ ԼԱՎ — բացատրություն ԻՆՉՈՒ
+// Օգտագործում ենք setTimeout requestAnimationFrame-ի փոխարեն
+// Safari-ում մոդալ պատուհանների անիմացիայի բագի պատճառով
+setTimeout(() => closeModal(), 0);
+
+// ✅ ԼԱՎ — նախազգուշացում
+// ՈՒՇԱԴՐՈՒԹՅՈՒՆ. կարգը կարևոր է։ Նախ վալիդացիա, ապա պահպանում
+await validateOrder(order);
+await saveOrder(order);
+
+// ✅ ԼԱՎ — TODO կոնտեքստով
+// TODO: Փոխարինել API call-ով backend-ի պատրաստվելուց հետո
+const products = mockProducts;
+```
+
+### Երբ Չմեկնաբանել
+
+```typescript
+// ❌ ՎԱՏ — ակնհայտ կոդ
+// Մեծացնում ենք հաշվիչը 1-ով
+counter++;
+
+// ❌ ՎԱՏ — կոդը պետք է ինքնափաստաթղթավորված լինի
+// Ստանում ենք օգտատիրոջ անունը
+const n = u.name;
+
+// ✅ ԼԱՎ — անունն ինքնին ասում է
+const userName = user.name;
+```
+
+### JSDoc հրապարակային ֆունկցիաների համար
+
+```typescript
+/**
+ * Հաշվում է պատվերի ընդհանուր արժեքը զեղչերն ու առաքումը հաշվի առնելով։
+ * 
+ * @param items - Պատվերում առկա ապրանքներ
+ * @param discount - Զեղչ տոկոսով (0-100)
+ * @param shippingCost - Առաքման արժեք
+ * @returns Պատվերի ընդհանուր գումար
+ * 
+ * @example
+ * const total = calculateOrderTotal(items, 10, 500);
+ * // total = (items-ի գումար * 0.9) + 500
+ */
+function calculateOrderTotal(
+  items: OrderItem[],
+  discount: number,
+  shippingCost: number
+): number {
+  const subtotal = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  const discountAmount = subtotal * (discount / 100);
+  return subtotal - discountAmount + shippingCost;
+}
+```
+
+---
+
+## 🔧 ՖՈՒՆԿՑԻԱՆԵՐ
+
+### Մաքուր ֆունկցիաներ (նախընտրելի)
+
+```typescript
+// ✅ Մաքուր ֆունկցիա — side effects չկա, դետերմինացված արդյունք
+function calculateDiscount(price: number, percentage: number): number {
+  return price * (percentage / 100);
+}
+
+// ❌ Անմաքուր ֆունկցիա — փոխում է արտաքին վիճակը
+let totalDiscount = 0;
+function calculateDiscount(price: number, percentage: number): number {
+  const discount = price * (percentage / 100);
+  totalDiscount += discount; // side effect
+  return discount;
+}
+```
+
+### Մեկ ֆունկցիա — մեկ խնդիր
+
+```typescript
+// ❌ ՎԱՏ — ֆունկցիան չափից շատ է անում
+async function processOrder(order: Order) {
+  // Վալիդացիա (10 տող)
+  // Գնի հաշվարկ (15 տող)
+  // Մնացորդների ստուգում (10 տող)
+  // Վճարման ստեղծում (20 տող)
+  // Email ուղարկում (15 տող)
+  // Լոգավորում (10 տող)
+}
+
+// ✅ ԼԱՎ — դեկոմպոզիցիա
+async function processOrder(order: Order) {
+  const validatedOrder = await validateOrder(order);
+  const pricedOrder = calculateOrderTotal(validatedOrder);
+  await reserveStock(pricedOrder);
+  const payment = await createPayment(pricedOrder);
+  await sendConfirmationEmail(pricedOrder);
+  await logOrderCreated(pricedOrder);
+  return { order: pricedOrder, payment };
+}
+```
+
+### Լռելյայն պարամետրներ
+
+```typescript
+// ✅ ԼԱՎ — լռելյայն արժեքներ
+function fetchProducts(options: {
+  page?: number;
+  limit?: number;
+  sortBy?: string;
+} = {}) {
+  const { page = 1, limit = 20, sortBy = 'createdAt' } = options;
+  // ...
+}
+
+// Կանչ
+fetchProducts(); // բոլոր արժեքները լռելյայն
+fetchProducts({ page: 2 }); // միայն page
+fetchProducts({ page: 2, limit: 50 }); // page և limit
+```
+
+---
+
+## 🚫 ԱՆՏԻՊԱՏԵՐՆԵՐ
+
+### Magic Numbers/Strings
+
+```typescript
+// ❌ ՎԱՏ
+if (user.age > 18) { ... }
+if (order.status === 'pending') { ... }
+setTimeout(callback, 86400000);
+
+// ✅ ԼԱՎ
+const ADULT_AGE = 18;
+const OrderStatus = { PENDING: 'pending', ... } as const;
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+if (user.age > ADULT_AGE) { ... }
+if (order.status === OrderStatus.PENDING) { ... }
+setTimeout(callback, ONE_DAY_MS);
+```
+
+### Մուտացիաներ
+
+```typescript
+// ❌ ՎԱՏ — արգումենտի մուտացիա
+function addItem(cart: Cart, item: Item) {
+  cart.items.push(item); // մուտացիա
+  return cart;
+}
+
+// ✅ ԼԱՎ — իմուտաբելություն
+function addItem(cart: Cart, item: Item): Cart {
+  return {
+    ...cart,
+    items: [...cart.items, item]
+  };
+}
+```
+
+### Բնիկ ternary օպերատորներ
+
+```typescript
+// ❌ ՎԱՏ
+const status = isLoading ? 'loading' : isError ? 'error' : isSuccess ? 'success' : 'idle';
+
+// ✅ ԼԱՎ
+function getStatus(state: State): Status {
+  if (state.isLoading) return 'loading';
+  if (state.isError) return 'error';
+  if (state.isSuccess) return 'success';
+  return 'idle';
+}
+```
+
+### Բացասական պայմաններ
+
+```typescript
+// ❌ ՎԱՏ — կրկնակի ժխտում
+if (!isNotValid) { ... }
+if (!user.isInactive) { ... }
+
+// ✅ ԼԱՎ — դրական պայմաններ
+if (isValid) { ... }
+if (user.isActive) { ... }
+```
+
+---
+
+## ✅ ԼԱՎԵՐԻՆ ՊՐԱԿՏԻԿՆԵՐ
+
+### Destructuring
+
+```typescript
+// ✅ Օբյեկտների դեստրուկտուրացում
+const { name, email, role } = user;
+
+// ✅ Դեստրուկտուրացում վերանվանումով
+const { name: userName, email: userEmail } = user;
+
+// ✅ Դեստրուկտուրացում պարամետրներում
+function greet({ name, title }: User) {
+  return `Hello, ${title} ${name}`;
+}
+```
+
+### Optional Chaining & Nullish Coalescing
+
+```typescript
+// ✅ Optional chaining
+const userName = user?.profile?.name;
+const firstItem = order?.items?.[0];
+
+// ✅ Nullish coalescing
+const limit = options.limit ?? 20; // 0-ը չի փոխարինվի 20-ով
+const name = user.name ?? 'Anonymous';
+
+// ❌ Խուսափի՛ր || լռելյայն արժեքների համար
+const limit = options.limit || 20; // 0-ը կփոխարինվի 20-ով
+```
+
+### Template Literals
+
+```typescript
+// ✅ ԼԱՎ
+const message = `Hello, ${user.name}! You have ${count} notifications.`;
+const url = `${API_BASE_URL}/users/${userId}/orders`;
+
+// ❌ ՎԱՏ
+const message = 'Hello, ' + user.name + '! You have ' + count + ' notifications.';
+```
+
+### Array Methods
+
+```typescript
+// ✅ Ֆունկցիոնալ մոտեցում
+const activeUsers = users
+  .filter(user => user.isActive)
+  .map(user => ({ id: user.id, name: user.name }))
+  .sort((a, b) => a.name.localeCompare(b.name));
+
+// ❌ Իմպերատիվ մոտեցում
+const activeUsers = [];
+for (let i = 0; i < users.length; i++) {
+  if (users[i].isActive) {
+    activeUsers.push({ id: users[i].id, name: users[i].name });
+  }
+}
+activeUsers.sort((a, b) => a.name.localeCompare(b.name));
+```
+
+---
+
+## 🔄 ՍԽԱԼՆԵՐԻ ՄՇԱԿՈՒՄ
+
+### Try/Catch
+
+```typescript
+// ✅ ԼԱՎ — կոնկրետ մշակում
+async function fetchUser(id: string): Promise<User> {
+  try {
+    const response = await api.get(`/users/${id}`);
+    return response.data;
+  } catch (error) {
+    if (error instanceof NotFoundError) {
+      throw new UserNotFoundError(id);
+    }
+    if (error instanceof NetworkError) {
+      throw new ServiceUnavailableError('User service unavailable');
+    }
+    throw error; // Չճանաչված սխալը փոխանցել
+  }
+}
+
+// ❌ ՎԱՏ — սխալների «խեղդում»
+async function fetchUser(id: string): Promise<User | null> {
+  try {
+    const response = await api.get(`/users/${id}`);
+    return response.data;
+  } catch (error) {
+    console.log(error); // Պարզապես լոգ ենք անում և null վերադարձնում
+    return null;
+  }
+}
+```
+
+### Custom Errors
+
+```typescript
+// ✅ Կաստոմ սխալներ բիզնես-լոգիկայի համար
+class ValidationError extends Error {
+  constructor(
+    message: string,
+    public readonly field: string,
+    public readonly code: string
+  ) {
+    super(message);
+    this.name = 'ValidationError';
+  }
+}
+
+class NotFoundError extends Error {
+  constructor(
+    public readonly resource: string,
+    public readonly id: string
+  ) {
+    super(`${resource} with id ${id} not found`);
+    this.name = 'NotFoundError';
+  }
+}
+
+// Օգտագործում
+throw new ValidationError('Invalid email format', 'email', 'INVALID_EMAIL');
+throw new NotFoundError('User', userId);
+```
+
+---
+
+## 📋 ԿՈԴԻ ՈՐԱԿԻ CHECKLIST
+
+### Commit-ից առաջ
+
+- [ ] TypeScript-ում `any` չկա
+- [ ] Բոլոր ֆունկցիաները ≤ 50 տող
+- [ ] Բոլոր ֆայլերը ≤ 300 տող
+- [ ] Բնիկություն ≤ 3 մակարդակ
+- [ ] Magic numbers/strings չկան
+- [ ] Մեկնաբանված կոդ չկա
+- [ ] console.log չկա (բացի debug-ից)
+- [ ] Բոլոր փոփոխականները հասկանալի են անվանված
+- [ ] JSDoc հրապարակային ֆունկցիաների համար
+- [ ] Բոլոր սխալները մշակված են
+
+---
+
+**Տարբերակ.** 1.0
+**Ամսաթիվ.** 2026-02-12

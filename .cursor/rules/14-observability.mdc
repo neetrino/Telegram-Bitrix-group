@@ -1,0 +1,681 @@
+---
+description: Observability-ի կանոններ։ Լոգավորում, մետրիկաներ, հետագծում, մոնիտորինգ։
+globs: ["**/*.ts", "**/*.tsx", "**/api/**", "**/server/**"]
+alwaysApply: false
+---
+
+# OBSERVABILITY-Ի ԿԱՆՈՆՆԵՐ
+
+> Եթե չես կարող չափել — չես կարող բարելավել։ Լոգեր, մետրիկաներ, հետագծեր = համակարգի ընկալում։
+
+---
+
+## 🎯 ՀԻՄՆԱԿԱՆ ՍԿԶԲՈՒՆՔՆԵՐ
+
+1. **Structured Logging** — JSON լոգեր կոնտեքստով
+2. **Correlation** — Request ID անցնում է ամբողջ համակարգով
+3. **Levels** — ճիշտ լոգավորման մակարդակներ
+4. **No PII** — անձնական տվյալներ լոգերում ՉԼԻՆԵԼ
+
+---
+
+## 📊 OBSERVABILITY-Ի ԵՐԵՔ ՀԱՄԱՐ
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    OBSERVABILITY                        │
+├─────────────────┬─────────────────┬─────────────────────┤
+│     LOGS        │    METRICS      │     TRACES          │
+│                 │                 │                     │
+│  Ինչ տեղի ունեցավ │  Քանի/Երբ      │  Հարցման ուղին     │
+│  Իրադարձությունների մանրամասներ │  Ագրեգացված       │  Բաշխված           │
+│  Debug/Troubleshoot│ Ալերտներ/դաշբորդներ│  Լատենտություն   │
+└─────────────────┴─────────────────┴─────────────────────┘
+```
+
+---
+
+## 📝 ԼՈԳԱՎՈՐՄԱՆ ԿԱՆՈՆՆԵՐ
+
+### Լոգավորման մակարդակներ
+
+| Մակարդակ | Երբ օգտագործել | Production |
+|---------|-------------------|------------|
+| `error` | Ուշադրություն պահանջող սխալներ | ✅ Այո |
+| `warn` | Հնարավոր խնդիրներ | ✅ Այո |
+| `info` | Կարևոր բիզնես-իրադարձություններ | ✅ Այո |
+| `debug` | Մանրամասներ debug-ի համար | ❌ Ոչ |
+| `trace` | Շատ մանրամասն տեղեկություն | ❌ Ոչ |
+
+### Կառուցվածքային լոգեր
+
+```typescript
+// lib/logger.ts
+import pino from 'pino';
+
+const isProduction = process.env.NODE_ENV === 'production';
+
+export const logger = pino({
+  level: isProduction ? 'info' : 'debug',
+  
+  // JSON production-ում, pretty development-ում
+  transport: isProduction
+    ? undefined
+    : {
+        target: 'pino-pretty',
+        options: {
+          colorize: true,
+          translateTime: 'HH:MM:ss',
+        },
+      },
+  
+  // Բազային դաշտեր բոլոր լոգերի համար
+  base: {
+    service: process.env.SERVICE_NAME || 'app',
+    env: process.env.NODE_ENV,
+    version: process.env.APP_VERSION,
+  },
+  
+  // Timestamp-ի ֆորմատավորում
+  timestamp: pino.stdTimeFunctions.isoTime,
+  
+  // Զգայուն տվյալների խմբագրում
+  redact: {
+    paths: [
+      'password',
+      'passwordHash',
+      'token',
+      'accessToken',
+      'refreshToken',
+      'authorization',
+      'cookie',
+      'creditCard',
+      '*.password',
+      '*.token',
+    ],
+    censor: '[REDACTED]',
+  },
+});
+
+// Child logger կոնտեքստով
+export function createLogger(context: Record<string, unknown>) {
+  return logger.child(context);
+}
+```
+
+### Լոգավորման կանոններ
+
+```typescript
+// ✅ ՃԻՇՏ — կառուցվածքային լոգեր կոնտեքստով
+
+// INFO — կարևոր բիզնես-իրադարձություններ
+logger.info({
+  event: 'order.created',
+  orderId: order.id,
+  userId: user.id,
+  total: order.total,
+  itemCount: order.items.length,
+}, 'Order created successfully');
+
+// WARN — հնարավոր խնդիրներ
+logger.warn({
+  event: 'payment.retry',
+  orderId,
+  attempt: 3,
+  maxAttempts: 5,
+}, 'Payment retry attempt');
+
+// ERROR — սխալներ ամբողջ կոնտեքստով
+logger.error({
+  event: 'payment.failed',
+  orderId,
+  errorCode: error.code,
+  errorMessage: error.message,
+  stack: error.stack,
+}, 'Payment processing failed');
+
+// DEBUG — մանրամասներ debug-ի համար (ոչ production-ում)
+logger.debug({
+  event: 'cache.miss',
+  key: cacheKey,
+  duration: fetchTime,
+}, 'Cache miss, fetched from database');
+```
+
+```typescript
+// ❌ ՍԽԱԼ
+
+// Կառուցվածք չկա
+logger.info('Order created');
+
+// Անձնական տվյալներ
+logger.info({ email, password }, 'User login');
+
+// Չափից շատ info-ում
+logger.info({ fullRequest, fullResponse }, 'API call');
+
+// Սխալի համար կոնտեքստ չկա
+logger.error('Something went wrong');
+```
+
+### Next.js Request Logging (middleware)
+
+```typescript
+// middleware.ts
+import { NextRequest, NextResponse } from 'next/server';
+import { v4 as uuid } from 'uuid';
+
+export function middleware(req: NextRequest) {
+  const requestId = req.headers.get('x-request-id') ?? uuid();
+  const start = Date.now();
+
+  const response = NextResponse.next();
+  response.headers.set('x-request-id', requestId);
+
+  // Structured log Vercel Logs / ցանկացած log collector-ի համար
+  // Edge Runtime-ում (middleware) pino-ն չի աշխատում, օգտագործում ենք structuredClone + stdout
+  const log = {
+    level: 'info',
+    event: 'request',
+    requestId,
+    method: req.method,
+    path: req.nextUrl.pathname,
+    userAgent: req.headers.get('user-agent'),
+    ip: req.headers.get('x-forwarded-for'),
+    timestamp: new Date().toISOString(),
+  };
+  // eslint-disable-next-line no-console -- Edge Runtime-ում pino-ն հասանելի չէ
+  console.info(JSON.stringify(log));
+
+  return response;
+}
+
+export const config = {
+  matcher: ['/api/:path*'],
+};
+```
+
+### Next.js Logging Route Handlers-ում և Server Actions-ում
+
+```typescript
+// lib/logger.ts — միասնական logger Next.js-ի համար
+import pino from 'pino';
+
+export const logger = pino({
+  level: process.env.LOG_LEVEL || 'info',
+  transport: process.env.NODE_ENV === 'development'
+    ? { target: 'pino-pretty' }
+    : undefined,
+});
+
+// app/api/orders/route.ts — օգտագործում route handler-ում
+import { NextRequest, NextResponse } from 'next/server';
+import { logger } from '@/lib/logger';
+
+export async function POST(req: NextRequest) {
+  const reqLogger = logger.child({ handler: 'POST /api/orders' });
+  const body = await req.json();
+
+  reqLogger.info({ userId: body.userId }, 'Creating order');
+
+  try {
+    const order = await createOrder(body);
+    reqLogger.info({ orderId: order.id }, 'Order created');
+    return NextResponse.json({ data: order }, { status: 201 });
+  } catch (error) {
+    reqLogger.error({ err: error }, 'Failed to create order');
+    return NextResponse.json({ error: { code: 'SERVER_ERROR' } }, { status: 500 });
+  }
+}
+```
+
+### NestJS/Express Request Logging Middleware
+
+```typescript
+// middleware/request-logger.ts
+import { Request, Response, NextFunction } from 'express';
+import { v4 as uuid } from 'uuid';
+import { logger } from '@/lib/logger';
+
+export function requestLogger(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  // Ստեղծում կամ վերցնում ենք requestId
+  const requestId = (req.headers['x-request-id'] as string) || uuid();
+  req.headers['x-request-id'] = requestId;
+  res.setHeader('x-request-id', requestId);
+
+  // Ընդլայնված Request-ի տիպացում
+  interface AuthenticatedRequest extends Request {
+    user?: { id: string };
+    logger?: ReturnType<typeof logger.child>;
+  }
+
+  const authReq = req as AuthenticatedRequest;
+
+  // Ստեղծում ենք logger հարցման կոնտեքստով
+  const reqLogger = logger.child({
+    requestId,
+    method: req.method,
+    path: req.path,
+    userAgent: req.headers['user-agent'],
+    ip: req.ip,
+    userId: authReq.user?.id,
+  });
+
+  // Սկզբի ժամանակ
+  const startTime = Date.now();
+
+  // Լոգավորում ենք հարցման սկիզբը
+  reqLogger.info({ event: 'request.start' }, 'Incoming request');
+
+  // Լոգավորում ենք ավարտը
+  res.on('finish', () => {
+    const duration = Date.now() - startTime;
+    const level = res.statusCode >= 400 ? 'warn' : 'info';
+
+    reqLogger[level]({
+      event: 'request.end',
+      statusCode: res.statusCode,
+      duration,
+    }, `Request completed in ${duration}ms`);
+  });
+
+  // Ավելացնում ենք logger request-ին handlers-ում օգտագործելու համար
+  authReq.logger = reqLogger;
+
+  next();
+}
+```
+
+### NestJS Logger
+
+```typescript
+// common/logger/logger.service.ts
+import { Injectable, LoggerService, Scope } from '@nestjs/common';
+import { logger as pinoLogger } from '@/lib/logger';
+import type { Logger } from 'pino';
+
+@Injectable({ scope: Scope.TRANSIENT })
+export class AppLogger implements LoggerService {
+  private context?: string;
+  private logger: Logger;
+
+  constructor() {
+    this.logger = pinoLogger;
+  }
+
+  setContext(context: string) {
+    this.context = context;
+    this.logger = pinoLogger.child({ context });
+  }
+
+  log(message: string, context?: Record<string, unknown>) {
+    this.logger.info(context || {}, message);
+  }
+
+  error(message: string, trace?: string, context?: Record<string, unknown>) {
+    this.logger.error({ ...context, stack: trace }, message);
+  }
+
+  warn(message: string, context?: Record<string, unknown>) {
+    this.logger.warn(context || {}, message);
+  }
+
+  debug(message: string, context?: Record<string, unknown>) {
+    this.logger.debug(context || {}, message);
+  }
+}
+
+// Օգտագործում սերվիսում
+@Injectable()
+export class OrdersService {
+  private readonly logger = new AppLogger();
+
+  constructor() {
+    this.logger.setContext(OrdersService.name);
+  }
+
+  async create(dto: CreateOrderDto, userId: string) {
+    this.logger.log('Creating order', { userId, itemCount: dto.items.length });
+    
+    try {
+      const order = await this.processOrder(dto);
+      this.logger.log('Order created', { orderId: order.id, userId });
+      return order;
+    } catch (error) {
+      this.logger.error('Failed to create order', error.stack, {
+        userId,
+        errorCode: error.code,
+      });
+      throw error;
+    }
+  }
+}
+```
+
+---
+
+## 📈 ՄԵՏՐԻԿԱՆԵՐ
+
+### Մետրիկաների տիպեր
+
+| Տիպ | Նկարագրություն | Օրինակ |
+|-----|----------|--------|
+| Counter | Հաշվիչ (միայն աճում է) | Հարցումների քանակ |
+| Gauge | Ընթացիկ արժեք | Ակտիվ կապեր |
+| Histogram | Արժեքների բաշխում | Պատասխանի ժամանակ |
+| Summary | Կվանտիլներ | P50, P95, P99 լատենտություն |
+
+### Հիմնական մետրիկաներ
+
+```typescript
+// metrics/app.metrics.ts
+import { Counter, Histogram, Gauge, Summary } from 'prom-client';
+
+// HTTP մետրիկաներ
+export const httpMetrics = {
+  // Հարցումների քանակ
+  requestsTotal: new Counter({
+    name: 'http_requests_total',
+    help: 'Total number of HTTP requests',
+    labelNames: ['method', 'path', 'status'],
+  }),
+
+  // Պատասխանի ժամանակ
+  requestDuration: new Histogram({
+    name: 'http_request_duration_seconds',
+    help: 'HTTP request duration in seconds',
+    labelNames: ['method', 'path', 'status'],
+    buckets: [0.01, 0.05, 0.1, 0.5, 1, 2, 5],
+  }),
+
+  // Ակտիվ հարցումներ
+  requestsInProgress: new Gauge({
+    name: 'http_requests_in_progress',
+    help: 'Number of HTTP requests in progress',
+    labelNames: ['method'],
+  }),
+};
+
+// Բիզնես մետրիկաներ
+export const businessMetrics = {
+  ordersCreated: new Counter({
+    name: 'orders_created_total',
+    help: 'Total number of orders created',
+    labelNames: ['status'],
+  }),
+
+  orderValue: new Histogram({
+    name: 'order_value_amount',
+    help: 'Order value distribution',
+    buckets: [10, 50, 100, 500, 1000, 5000],
+  }),
+
+  paymentProcessingTime: new Histogram({
+    name: 'payment_processing_seconds',
+    help: 'Payment processing time',
+    labelNames: ['provider'],
+    buckets: [0.5, 1, 2, 5, 10, 30],
+  }),
+};
+
+// ԲԴ մետրիկաներ
+export const dbMetrics = {
+  queryDuration: new Histogram({
+    name: 'db_query_duration_seconds',
+    help: 'Database query duration',
+    labelNames: ['operation', 'table'],
+    buckets: [0.001, 0.01, 0.05, 0.1, 0.5, 1],
+  }),
+
+  connectionPoolSize: new Gauge({
+    name: 'db_connection_pool_size',
+    help: 'Database connection pool size',
+    labelNames: ['state'], // active, idle, waiting
+  }),
+};
+```
+
+### RED մետրիկաներ (սերվիսների համար)
+
+```
+Rate     — հարցումներ վայրկյանում
+Errors   — սխալների տոկոս
+Duration — պատասխանի ժամանակ (P50, P95, P99)
+```
+
+### USE մետրիկաներ (ռեսուրսների համար)
+
+```
+Utilization — օգտագործման %
+Saturation  — հերթ/սպասում
+Errors      — սխալների քանակ
+```
+
+---
+
+## 🔗 DISTRIBUTED TRACING
+
+### Correlation ID
+
+```typescript
+// === Next.js — middleware.ts ===
+import { NextRequest, NextResponse } from 'next/server';
+import { v4 as uuid } from 'uuid';
+
+export function middleware(req: NextRequest) {
+  const correlationId =
+    req.headers.get('x-correlation-id') ??
+    req.headers.get('x-request-id') ??
+    uuid();
+
+  // Փոխանցում ենք headers-ում route handlers-ին
+  const requestHeaders = new Headers(req.headers);
+  requestHeaders.set('x-correlation-id', correlationId);
+
+  const response = NextResponse.next({ request: { headers: requestHeaders } });
+  response.headers.set('x-correlation-id', correlationId);
+  return response;
+}
+
+// Կարդալ route handler-ում:
+// const correlationId = req.headers.get('x-correlation-id');
+
+// === NestJS/Express — middleware/correlation.ts ===
+import { AsyncLocalStorage } from 'async_hooks';
+import { v4 as uuid } from 'uuid';
+import { Request, Response, NextFunction } from 'express';
+
+const correlationStorage = new AsyncLocalStorage<{ correlationId: string }>();
+
+export function correlationMiddleware(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  const correlationId = 
+    (req.headers['x-correlation-id'] as string) ??
+    (req.headers['x-request-id'] as string) ??
+    uuid();
+
+  req.headers['x-correlation-id'] = correlationId;
+  res.setHeader('x-correlation-id', correlationId);
+
+  // Ավելացնում ենք AsyncLocalStorage-ում ամենուր հասանելիության համար
+  correlationStorage.run({ correlationId }, () => {
+    next();
+  });
+}
+
+// Correlation ID-ի ստացում կոդի ցանկացած տեղից
+export function getCorrelationId(): string | undefined {
+  return correlationStorage.getStore()?.correlationId;
+}
+```
+
+### Փոխանցում արտաքին կանչերին
+
+```typescript
+// lib/api-client.ts
+
+export async function externalApiCall<T>(
+  url: string,
+  options?: RequestInit,
+): Promise<T> {
+  const correlationId = getCorrelationId();
+
+  const response = await fetch(url, {
+    ...options,
+    headers: {
+      ...options?.headers,
+      'x-correlation-id': correlationId || uuid(),
+    },
+  });
+
+  return response.json();
+}
+```
+
+### OpenTelemetry (մեծ նախագծերի համար)
+
+```typescript
+// instrumentation.ts
+import { NodeSDK } from '@opentelemetry/sdk-node';
+import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node';
+import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
+
+const sdk = new NodeSDK({
+  serviceName: process.env.SERVICE_NAME,
+  traceExporter: new OTLPTraceExporter({
+    url: process.env.OTEL_EXPORTER_OTLP_ENDPOINT,
+  }),
+  instrumentations: [
+    getNodeAutoInstrumentations({
+      '@opentelemetry/instrumentation-fs': { enabled: false },
+    }),
+  ],
+});
+
+sdk.start();
+```
+
+---
+
+## 🚨 ԱԼԵՐՏՆԵՐ
+
+### Ալերտների կանոններ
+
+```yaml
+# Կրիտիկ (անհապաղ արձագանք)
+- alert: HighErrorRate
+  condition: error_rate > 5%
+  for: 5m
+  severity: critical
+
+- alert: ServiceDown
+  condition: up == 0
+  for: 1m
+  severity: critical
+
+# Նախազգուշացումներ (պարզաբանել)
+- alert: HighLatency
+  condition: p99_latency > 2s
+  for: 10m
+  severity: warning
+
+- alert: DiskSpaceRunningLow
+  condition: disk_usage > 80%
+  for: 30m
+  severity: warning
+```
+
+### SLI/SLO (Service Level Indicators/Objectives)
+
+```markdown
+## SLO API-ի համար
+
+| Մետրիկա | SLO | Չափում |
+|---------|-----|--------|
+| Availability | 99.9% | Հաջող հարցումներ / Բոլոր հարցումներ |
+| Latency P99 | < 500ms | Պատասխանի ժամանակի 99-րդ պերցենտիլ |
+| Error Rate | < 0.1% | 5xx սխալներ / Բոլոր հարցումներ |
+
+## Error Budget
+
+- SLO 99.9% = 0.1% թույլատրելի սխալներ
+- 43.2 րոպե downtime ամսում
+- Թերացումից բարձր — ռելիզների սառեցում
+```
+
+---
+
+## 📋 ԻՆՉ ԼՈԳԱՎՈՐԵԼ
+
+### ✅ ԼՈԳԱՎՈՐԻ՛Ր
+
+```typescript
+// Բիզնես-իրադարձություններ
+logger.info({ event: 'user.registered', userId });
+logger.info({ event: 'order.created', orderId, total });
+logger.info({ event: 'payment.completed', orderId, amount });
+
+// Սխալներ կոնտեքստով
+logger.error({ event: 'payment.failed', orderId, errorCode, stack });
+
+// Արտադրողականություն
+logger.info({ event: 'db.query', duration, query: 'findUsers' });
+
+// Security իրադարձություններ
+logger.warn({ event: 'auth.failed', ip, email: maskEmail(email) });
+logger.info({ event: 'password.changed', userId });
+```
+
+### ❌ ՄԻ ԼՈԳԱՎՈՐԻ՛Ր
+
+```typescript
+// Անձնական տվյալներ
+logger.info({ password, ssn, creditCard }); // ❌
+
+// Թոքեններ և գաղտնիքներ
+logger.debug({ accessToken, apiKey }); // ❌
+
+// Չափից մանրամասն տվյալներ
+logger.info({ fullRequestBody, fullResponseBody }); // ❌
+
+// Յուրաքանչյուր ֆունկցիայի կանչ
+logger.debug('Entering function X'); // ❌ Չափից աղմկոտ
+```
+
+---
+
+## 📋 ՍՏՈՒԳԱՑՈՒՑԱԿ
+
+### Լոգավորում
+
+- [ ] Օգտագործվում է structured logging (JSON)
+- [ ] Կարգավորված են ճիշտ մակարդակներ (info prod-ում)
+- [ ] Request ID յուրաքանչյուր լոգում
+- [ ] PII/գաղտնիքներ լոգերում չկան
+- [ ] Սխալները լոգավորվում են կոնտեքստով և stack trace-ով
+- [ ] Բիզնես-իրադարձությունները լոգավորվում են
+
+### Մետրիկաներ
+
+- [ ] HTTP մետրիկաներ (rate, errors, duration)
+- [ ] Բիզնես-մետրիկաներ (orders, payments, etc.)
+- [ ] ԲԴ մետրիկաներ (query time, connections)
+- [ ] Մետրիկաներ հասանելի /metrics endpoint-ով
+
+### Մոնիտորինգ
+
+- [ ] Դաշբորդներ հիմնական մետրիկաների համար
+- [ ] Ալերտներ կրիտիկ իրադարձությունների համար
+- [ ] SLO-ներ սահմանված և հետևվում են
+
+---
+
+**Տարբերակ.** 1.1
+**Ամսաթիվ.** 2026-02-12

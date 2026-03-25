@@ -1,0 +1,32 @@
+# Временно отключено. Чтобы включить: скопируй в .github/workflows/ci.yml
+# Minimal CI for rules-template repo: validate structure and critical files.
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check required structure
+        run: |
+          test -f .cursor/rules/00-core.mdc || (echo "Missing .cursor/rules/00-core.mdc" && exit 1)
+          test -f docs/BRIEF.md || (echo "Missing docs/BRIEF.md" && exit 1)
+          test -d .cursor/rules || (echo "Missing .cursor/rules/" && exit 1)
+          test -d reference/templates || (echo "Missing reference/templates/" && exit 1)
+          echo "Structure OK"
+
+      - name: Check docs when present (TECH_CARD/ARCHITECTURE/PROGRESS created at onboarding)
+        run: |
+          for f in docs/TECH_CARD.md docs/01-ARCHITECTURE.md docs/PROGRESS.md; do
+            if [ -f "$f" ]; then
+              test -s "$f" || (echo "Empty: $f" && exit 1)
+            fi
+          done
+          echo "Docs check OK"
