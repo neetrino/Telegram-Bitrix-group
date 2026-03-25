@@ -1,54 +1,91 @@
-# Զարգացման կանոնների կաղապար (Cursor AI)
+# Bitrix24 → Telegram (GramJS), synchronous Next.js backend
 
-Cursor-ում AI-զարգացման կանոններով repo-ի կաղապար։ Next.js / NestJS, ճարտարապետություն, կոդ, անվտանգություն, թեստեր, դեպլոյ։
+Production-oriented **Next.js App Router** API only: **Bitrix24** sends a webhook, this service runs the full **GramJS (MTProto user)** pipeline **in the same request** — no Redis, no BullMQ, no worker process, no database.
 
----
+## Flow
 
-## Ինչպես սկսել
+```
+POST /api/bitrix/webhook → validate → GramJS → file logs + JSON mapping → HTTP response
+```
 
-1. **Repo** — GitHub → Use this template → clone, բացի՛ր պրոյեկտի թղթապանակը Cursor-ում։
-2. **BRIEF** — լրացրու՛ `docs/BRIEF.md` (նկարագրություն, ֆունկցիաներ, ինտեգրացիաներ)։
-3. **AI** — chat-ում. «Կարդա՛ docs/BRIEF.md, սկսի՛ր ըստ 21-project-onboarding.mdc. Փուլ 1 — չափը, Փուլ 2 — TECH_CARD. Սպասում եմ հաստատում կոդից առաջ»։
-4. **Հաստատում** — TECH_CARD և ճարտարապետությունը հաստատի՛ր, ապա env։
+## Requirements
 
----
+- Node.js 20+
+- Telegram **user** API (`api_id` / `api_hash` from [my.telegram.org](https://my.telegram.org))
+- A valid **StringSession** (not a bot token)
 
-## Մշակողի դերը
+## Setup
 
-- **Կոդից առաջ:** BRIEF, TECH_CARD, ճարտարապետություն — AI-ն առաջարկում է, դու հաստատում ես։
-- **Տվյալներ (AI-ն կխնդրի ըստ need-ի):** Neon (DATABASE_URL), R2 (bucket + բանալիներ), Vercel (env), Auth (OAuth), Resend/Stripe/Դոմեն — անհրաժեշտության դեպքում։
-- **Env:** Ստեղծել `.env` + `.env.example` (առանց գաղտնիքների), `.gitignore`-ում — `.env`, `.env.local`. 
-Հերթականություն. 
-Neon → `.env`
-R2 →  `.env`
-Resend / Upstash (եթե պետք է) → `.env`. Գաղտնիքները միայն env-ում, `.env` — չի commit-վում։
-- **Ընթացքում:** Պատասխանի՛ր AI-ի հարցերին, ստուգի՛ր PROGRESS.md, թեստավորի՛ր փուլերը։
-- **Ավարտին:** TECH_CARD ✅, PROGRESS 100%, դեպլոյ + .env.example փաստաթղթավորված։
+1. `cp .env.example .env` and fill secrets.
 
----
+2. Obtain a session (once):
 
-## Նախագծերի չափեր
+   ```bash
+   npm run telegram:login
+   ```
 
-| Չափ | Նկարագրություն | Կառուցվածք |
-|-----|-----------------|------------|
-| **A** | 1–3 ամիս, 5–15 ֆիչ | `src/app`, `components`, `lib` |
-| **B** | 3–6 ամիս, 15–50 ֆիչ | `src/features/*`, `shared/*` |
-| **C** | 6+ ամիս, 50+ ֆիչ | Monorepo `apps/*`, `packages/*` |
+   Paste the printed `TELEGRAM_SESSION_STRING` into `.env`.
 
-**Տեղեկատուներ.** `reference/platforms/`, `knowledge-base/`, `templates/` — Vercel, Neon, R2, Render, փաստաթղթերի կաղապարներ։
+3. Install and run:
 
----
+   ```bash
+   npm ci
+   npm run build
+   npm start
+   ```
 
-## Կանոնների թարմացում
+   Development:
 
-Template-ի կանոնները թարմացվում են։ Գոյություն ունեցող նախագծում. ավելացրու՛ կաղապարը remote, fetch արա՛, ապա merge/checkout արա՛ անհրաժեշտ `.cursor/rules/*.mdc` ֆայլերը (մանրամասներ — Git-ի remote/fetch/checkout ուղեցույցներ)։
+   ```bash
+   npm run dev
+   ```
 
----
+## HTTP
 
-## Quality Automation
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/health` | Liveness |
+| POST | `/api/bitrix/webhook` | Bitrix outbound webhook (`X-Webhook-Secret` or `?secret=`) |
 
-Պրոյեկտ ստեղծելուց հետո. AI-ն (onboarding 3.1.1) — prettier, vitest, husky, commitlint, CI workflow. Մշակողը. Branch Protection (`main`), Secret Protection, Dependabot npm։ Մանրամասներ — `docs/QUALITY_AUTOMATION_PLAN.md`։
+### Webhook JSON (examples)
 
----
+Minimal custom shape:
 
-[MIT](LICENSE) — ազատ օգտագործում և հարմարեցում։
+```json
+{
+  "entityId": "deal-123",
+  "title": "Acme deal",
+  "participantUsernames": ["teammate"],
+  "initialMessage": "Group created from Bitrix",
+  "followUpMessages": ["Update: stage changed"],
+  "fileUrls": ["https://example.com/doc.pdf"],
+  "forceCreate": false
+}
+```
+
+Bitrix-style shapes with `data.FIELDS.ID` / `TITLE` are also accepted (see `src/lib/bitrix/parser.ts`).
+
+## Storage
+
+- `storage/mappings/bitrix-to-telegram.json` — Bitrix entity id → Telegram peer id  
+- `storage/state/webhook-dedup.json` — completed idempotency keys  
+- `storage/logs/app-*.log` — JSON lines  
+- `storage/temp/` — short-lived downloads for file send  
+
+## Security
+
+- Never commit `.env` or session strings.  
+- Use HTTPS in production; rotate `BITRIX_WEBHOOK_SECRET` periodically.
+
+## Limits
+
+Long-running webhooks may hit **serverless timeouts** (e.g. Vercel). For heavy Telegram work, run **Node on a VPS/Docker** with an appropriate HTTP timeout.
+
+## Docs
+
+- `IMPLEMENTATION_PLAN.md` — architecture  
+- `TASK_PROGRESS.md` — delivery checklist  
+
+## License
+
+See `LICENSE` (repository default).
